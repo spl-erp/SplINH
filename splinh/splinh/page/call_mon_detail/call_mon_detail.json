@@ -1,0 +1,23 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "module": "SplINH",
+ "name": "call-mon-detail",
+ "owner": "Administrator",
+ "page_name": "call-mon-detail",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Call Tracker Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Call Monitoring - Detailed"
+}

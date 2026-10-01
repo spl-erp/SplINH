@@ -1,0 +1,119 @@
+{
+ "actions": [],
+ "creation": "2026-09-24 15:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "device_id",
+  "device_call_id",
+  "call_log_name",
+  "column_break_csf1",
+  "user",
+  "attempts",
+  "last_attempt",
+  "section_break_csf1",
+  "reason",
+  "payload"
+ ],
+ "fields": [
+  {
+   "fieldname": "device_id",
+   "fieldtype": "Data",
+   "label": "Device ID",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "device_call_id",
+   "fieldtype": "Data",
+   "label": "Device Call ID",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "call_log_name",
+   "fieldtype": "Data",
+   "label": "Intended Call Log ID",
+   "description": "The id the Call Log would have had if the insert had succeeded - same value push_calls would report as synced, once this is resolved and reprocessed."
+  },
+  {
+   "fieldname": "column_break_csf1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "User",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts Made",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "last_attempt",
+   "fieldtype": "Datetime",
+   "label": "Last Attempt"
+  },
+  {
+   "fieldname": "section_break_csf1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "payload",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Original Entry (JSON)",
+   "description": "The exact call-log entry as received from the device, preserved so this can be manually reprocessed without asking the phone to resend it."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-24 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "Call Sync Failure",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "autoname": "hash",
+ "allow_rename": 0,
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Call Tracker Manager",
+   "share": 1,
+   "write": 0
+  }
+ ],
+ "description": "A call-log entry from the mobile app that could not be saved as a Call Log after retrying, kept so nothing is silently lost - the background insert job writes here on final failure."
+}

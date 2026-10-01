@@ -1,0 +1,89 @@
+{
+ "actions": [],
+ "creation": "2026-09-22 15:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "module_name",
+  "solution_provider",
+  "column_break_sm1",
+  "enabled",
+  "description"
+ ],
+ "fields": [
+  {
+   "fieldname": "module_name",
+   "fieldtype": "Data",
+   "label": "Module Name",
+   "unique": 1,
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "solution_provider",
+   "fieldtype": "Link",
+   "label": "Solution Provider",
+   "options": "Solution Provider",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Who an issue about this module is escalated to."
+  },
+  {
+   "fieldname": "column_break_sm1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-22 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "System Module",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "field:module_name",
+ "naming_rule": "By fieldname",
+ "allow_rename": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Support Team",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "description": "A part of the system an issue can be about. Maps to the provider who owns it."
+}

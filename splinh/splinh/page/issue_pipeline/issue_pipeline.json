@@ -1,0 +1,23 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "module": "SplINH",
+ "name": "issue-pipeline",
+ "owner": "Administrator",
+ "page_name": "issue-pipeline",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Support Team"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "Issue Pipeline Tracker"
+}
