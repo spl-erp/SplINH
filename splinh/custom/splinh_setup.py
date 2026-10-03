@@ -91,7 +91,6 @@ def execute():
 		ensure_call_tracking,
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
-		ensure_call_log_phone_matching,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
 		ensure_call_monitoring_detailed_page,
@@ -2594,100 +2593,6 @@ def _ensure_call_recording_player():
 			"script": CALL_RECORDING_PLAYER_JS,
 		},
 	)
-
-
-# -------------------------------------------------- Call Log phone matching
-
-# Lead has three raw phone-ish fields (see stock get_lead_with_phone_number's
-# or_filters); Contact's numbers live one-per-row on the child "Contact Phone"
-# table instead. Each gets its own normalized ("last 10 digits, non-digit
-# stripped") Custom Field, indexed via search_index so an exact-match lookup
-# can use a real index - never stock's unindexed LIKE '%number'. See
-# custom/call_log_phone_matching.py for the normalizer and the doc_events
-# hooks (hooks.py) that keep these in sync on every Lead/Contact save, and
-# api/call_tracking.py for where the pre-insert lookup uses them.
-#
-# Chosen over a MariaDB generated/virtual indexed column (this bench runs
-# 10.11.14, which does support secondary indexes on virtual columns) because:
-#   - Lead alone needs three separate normalized values (phone, mobile_no,
-#     whatsapp_no) - a generated column would still need three separate
-#     columns, so it does not reduce the number of fields to manage either way.
-#   - A stored Custom Field is created, tracked, and synced entirely through
-#     Frappe's own DocField/Custom Field machinery - the exact mechanism this
-#     file already uses for every other field on Call Log/Lead/Contact, and
-#     the one guaranteed to survive `bench migrate` and a periodic
-#     restore-from-prod-backup (this module's whole reason to exist, per its
-#     own docstring). A raw `GENERATED ALWAYS AS (...) VIRTUAL` column added
-#     via manual ALTER TABLE would not be represented by any DocField/Custom
-#     Field record at all, so nothing in Frappe's schema sync would know it
-#     exists - there is no precedent anywhere in this codebase for an
-#     untracked raw column, and no way to confirm it would survive whatever
-#     schema operation Frappe performs on a future Customize Form change to
-#     either doctype.
-LEAD_PHONE_LAST10_FIELDS = [
-	{
-		"fieldname": "custom_phone_last10",
-		"label": "Phone (last 10 digits, normalized)",
-		"fieldtype": "Data",
-		"insert_after": "phone",
-		"hidden": 1,
-		"read_only": 1,
-		"no_copy": 1,
-		"search_index": 1,
-	},
-	{
-		"fieldname": "custom_mobile_last10",
-		"label": "Mobile No (last 10 digits, normalized)",
-		"fieldtype": "Data",
-		"insert_after": "mobile_no",
-		"hidden": 1,
-		"read_only": 1,
-		"no_copy": 1,
-		"search_index": 1,
-	},
-	{
-		"fieldname": "custom_whatsapp_last10",
-		"label": "WhatsApp No (last 10 digits, normalized)",
-		"fieldtype": "Data",
-		"insert_after": "whatsapp_no",
-		"hidden": 1,
-		"read_only": 1,
-		"no_copy": 1,
-		"search_index": 1,
-	},
-]
-
-CONTACT_PHONE_LAST10_FIELD = {
-	"fieldname": "custom_last10",
-	"label": "Last 10 digits (normalized)",
-	"fieldtype": "Data",
-	"insert_after": "phone",
-	"hidden": 1,
-	"read_only": 1,
-	"no_copy": 1,
-	"search_index": 1,
-}
-
-
-def ensure_call_log_phone_matching():
-	for df in LEAD_PHONE_LAST10_FIELDS:
-		name = f"Lead-{df['fieldname']}"
-		if frappe.db.exists("Custom Field", name):
-			continue
-		frappe.get_doc({"doctype": "Custom Field", "dt": "Lead", "is_system_generated": 0, **df}).insert(
-			ignore_permissions=True
-		)
-
-	name = f"Contact Phone-{CONTACT_PHONE_LAST10_FIELD['fieldname']}"
-	if not frappe.db.exists("Custom Field", name):
-		frappe.get_doc(
-			{
-				"doctype": "Custom Field",
-				"dt": "Contact Phone",
-				"is_system_generated": 0,
-				**CONTACT_PHONE_LAST10_FIELD,
-			}
-		).insert(ignore_permissions=True)
 
 
 # ------------------------------------------------------- Call Monitoring dashboard

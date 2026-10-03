@@ -22,14 +22,16 @@ bugs came out of that:
      DUMMY, the three rows with to="919225144953" did not.
 
 Fix built here, in OUR app, not core: a normalized "last 10 digits, non-digit
-characters stripped" value stored on Lead (one per raw phone-ish field, since
-Lead has three: phone, mobile_no, whatsapp_no) and on Contact Phone (one per
-row, since a Contact can have several numbers), each backed by an indexed
-Custom Field (search_index=1) so an EXACT match against it can use a real
-index - never a wildcard, never a leading '%'. See
-splinh_setup.py's `ensure_call_log_phone_matching` for the field
-definitions, and `api/call_tracking.py`'s push_calls/ingest_whatsapp_call for
-where the pre-insert lookup happens.
+characters stripped" exact match, computed at QUERY TIME against the raw
+phone-ish fields that already exist (Lead.phone/mobile_no/whatsapp_no,
+Contact Phone.phone) via `_normalize_sql_expr()` below - no stored or virtual
+column of any kind (2026-10: an earlier version of this fix stored the
+normalized value in dedicated indexed Custom Fields; abandoned because
+`tabLead` is already too wide for another fixed-width column - adding one
+more hit MariaDB's 65535-byte max row size and silently failed on every
+`bench migrate`, which is what let this bug reach production undetected).
+See `find_party_by_last10()` below, and `api/call_tracking.py`'s
+push_calls/ingest_whatsapp_call for where the pre-insert lookup happens.
 
 IMPORTANT (confirmed live, 2026-09-26): Call Log's own before_insert is
 UNCONDITIONAL - it does not check whether self.customer or self.links are
@@ -73,135 +75,74 @@ def last10(number):
 
 # Lead has three separate raw phone-ish fields (unlike Contact, which has a
 # child table with one row per number) - or_filters across all three in stock
-# get_lead_with_phone_number. Mirrored here as three normalized+indexed columns
-# rather than trying to merge them into one, so a change to any one of them is
-# still tracked as a plain field-level sync with no aggregation logic needed.
-LEAD_PHONE_FIELDS = {
-	"phone": "custom_phone_last10",
-	"mobile_no": "custom_mobile_last10",
-	"whatsapp_no": "custom_whatsapp_last10",
-}
+# get_lead_with_phone_number. Priority order matches the old stored-column
+# design: phone, then mobile_no, then whatsapp_no.
+LEAD_PHONE_FIELDNAMES = ("phone", "mobile_no", "whatsapp_no")
 
 
-def set_lead_phone_last10(doc, method=None):
-	"""Lead validate hook: keep the three normalized/indexed columns in sync
-	whenever the doc is saved. Cheap (pure string ops, no query) - safe on
-	every save, not just changed ones, so a hand-edited raw field always ends
-	up correctly normalized too.
-	"""
-	for source_field, target_field in LEAD_PHONE_FIELDS.items():
-		doc.set(target_field, last10(doc.get(source_field)))
-
-
-def set_contact_phone_last10(doc, method=None):
-	"""Contact validate hook: normalize every row of the child Contact Phone
-	table (a Contact can have several numbers, unlike Lead's fixed fields).
-	"""
-	for row in doc.get("phone_nos") or []:
-		row.custom_last10 = last10(row.phone)
+def _normalize_sql_expr(column):
+	"""SQL expression computing the same value as `last10()` above, directly
+	against a raw column - no stored/virtual column involved. Used by
+	find_party_by_last10() below as a query-time WHERE condition."""
+	stripped = f"REGEXP_REPLACE({column}, '[^0-9]', '')"
+	return f"IF(CHAR_LENGTH({stripped}) >= 10, RIGHT({stripped}, 10), NULL)"
 
 
 def find_party_by_last10(number):
-	"""Exact-match lookup against the normalized/indexed columns - the
-	pre-insert replacement for stock's unindexed LIKE '%number' scan.
+	"""Exact-match lookup against the SAME raw phone columns Lead/Contact
+	Phone already have - normalized at query time via `_normalize_sql_expr`,
+	never read from a separately stored column (2026-10: superseded the
+	stored-Custom-Field design - see the module docstring above for why).
 
 	Returns a dict {"doctype": "Lead"|"Contact", "name": ...} for the first
 	match found (Contact checked first, same priority stock's before_insert
 	effectively ends up with since Contact -> Customer is the most-resolved
 	party _resolve_linked_party can report), or None if nothing matches.
 
-	Always an exact `=` comparison against a pre-normalized value - never a
-	wildcard - so this can and does use the search_index on each column
-	(confirmed via EXPLAIN, see splinh_setup.py / CHANGELOG.md).
+	`key` is always passed as a bind parameter, never string-interpolated -
+	only the fixed, hardcoded column name is interpolated into the SQL text
+	via `_normalize_sql_expr`.
+
+	Performance note: this can no longer use a B-tree index - each call is a
+	full scan of the relevant table with REGEXP_REPLACE computed per row,
+	instead of an indexed exact match. Acceptable here because every caller
+	runs off the HTTP hot path: the live insert path already runs in a
+	background job (frappe.enqueue(..., queue="long", timeout=300) - see
+	api/call_tracking.py's own docstring, which already accounts for a
+	15-33s/call cost from stock's own before_insert match), and the other
+	caller (rematch_call_logs) runs from an explicit bench CLI command with
+	no timeout.
 	"""
 	key = last10(number)
 	if not key:
 		return None
 
-	contact = frappe.db.get_value(
-		"Contact Phone", {"custom_last10": key}, "parent", order_by="creation desc"
+	contact = frappe.db.sql(
+		f"""
+		SELECT parent FROM `tabContact Phone`
+		WHERE {_normalize_sql_expr("phone")} = %(key)s
+		ORDER BY creation DESC
+		LIMIT 1
+		""",
+		{"key": key},
 	)
 	if contact:
-		return {"doctype": "Contact", "name": contact}
+		return {"doctype": "Contact", "name": contact[0][0]}
 
-	for target_field in LEAD_PHONE_FIELDS.values():
-		lead = frappe.db.get_value(
-			"Lead", {target_field: key}, "name", order_by="creation desc"
+	for fieldname in LEAD_PHONE_FIELDNAMES:
+		lead = frappe.db.sql(
+			f"""
+			SELECT name FROM `tabLead`
+			WHERE {_normalize_sql_expr(fieldname)} = %(key)s
+			ORDER BY creation DESC
+			LIMIT 1
+			""",
+			{"key": key},
 		)
 		if lead:
-			return {"doctype": "Lead", "name": lead}
+			return {"doctype": "Lead", "name": lead[0][0]}
 
 	return None
-
-
-BACKFILL_BATCH_SIZE = 1000
-
-
-def _normalize_sql_expr(column):
-	"""SQL expression computing the same value as `last10()` above, for a
-	set-based batch UPDATE (avoids loading every row through the ORM for a
-	one-time backfill over tens of thousands of rows)."""
-	stripped = f"REGEXP_REPLACE({column}, '[^0-9]', '')"
-	return f"IF(CHAR_LENGTH({stripped}) >= 10, RIGHT({stripped}, 10), NULL)"
-
-
-def backfill_lead_last10(batch_size=BACKFILL_BATCH_SIZE):
-	"""One-time batched backfill of the three normalized/indexed Lead columns
-	for records that predate the doc_events hook (set_lead_phone_last10) or
-	predate the fields entirely. Safe to re-run - only ever recomputes from the
-	current raw values, so a hand-edited phone number is picked up too.
-
-	Returns the number of rows scanned (not necessarily changed - the SET
-	clause is a no-op for a row whose normalized value already matches).
-	"""
-	scanned = 0
-	start = 0
-	while True:
-		names = frappe.get_all("Lead", pluck="name", limit_start=start, limit_page_length=batch_size, order_by="name")
-		if not names:
-			break
-		placeholders = ", ".join(["%s"] * len(names))
-		frappe.db.sql(
-			f"""
-			UPDATE `tabLead`
-			SET
-				custom_phone_last10 = {_normalize_sql_expr('phone')},
-				custom_mobile_last10 = {_normalize_sql_expr('mobile_no')},
-				custom_whatsapp_last10 = {_normalize_sql_expr('whatsapp_no')}
-			WHERE name IN ({placeholders})
-			""",
-			tuple(names),
-		)
-		frappe.db.commit()
-		scanned += len(names)
-		start += batch_size
-	return scanned
-
-
-def backfill_contact_phone_last10(batch_size=BACKFILL_BATCH_SIZE):
-	"""One-time batched backfill of Contact Phone's normalized/indexed column.
-	Same semantics as backfill_lead_last10 above."""
-	scanned = 0
-	start = 0
-	while True:
-		names = frappe.get_all(
-			"Contact Phone", pluck="name", limit_start=start, limit_page_length=batch_size, order_by="name"
-		)
-		if not names:
-			break
-		placeholders = ", ".join(["%s"] * len(names))
-		frappe.db.sql(
-			f"""
-			UPDATE `tabContact Phone`
-			SET custom_last10 = {_normalize_sql_expr('phone')}
-			WHERE name IN ({placeholders})
-			""",
-			tuple(names),
-		)
-		frappe.db.commit()
-		scanned += len(names)
-		start += batch_size
-	return scanned
 
 
 def _call_log_number(doc):

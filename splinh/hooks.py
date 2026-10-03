@@ -5,16 +5,7 @@ app_description = "Call tracking, monitoring, phone matching, manager review, an
 app_email = "support@splashjetink.com"
 app_license = "mit"
 
-# Keeps the normalized/indexed phone-matching columns in sync - see
-# custom/call_log_phone_matching.py for why (stock Call Log's before_insert
-# phone match is an unindexed, dash-sensitive LIKE '%number').
 doc_events = {
-	"Lead": {
-		"validate": "splinh.custom.call_log_phone_matching.set_lead_phone_last10"
-	},
-	"Contact": {
-		"validate": "splinh.custom.call_log_phone_matching.set_contact_phone_last10"
-	},
 	# Manager-review fields - see custom/call_log_manager_review.py and
 	# _ensure_call_manager_review_fields() in custom/splinh_setup.py.
 	"Call Log": {
