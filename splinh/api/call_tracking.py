@@ -56,7 +56,8 @@ import requests
 from frappe.utils import cint, get_bench_path, get_datetime
 from frappe.utils.file_manager import save_file
 
-from splinh.custom.call_log_phone_matching import ensure_dynamic_link, find_party_by_last10
+from splinh.custom.call_log_phone_matching import ensure_dynamic_link
+from splinh.custom.phone_lookup import find_party_by_phone
 
 CALL_LOG_INSERT_MAX_ATTEMPTS = 3
 CALL_LOG_INSERT_RETRY_DELAY_SECONDS = 5
@@ -159,7 +160,7 @@ def _resolve_linked_party(doc):
 	BUG FOUND 2026-09-26 (real test case: CRM-LEAD-2026-02789 / Contact
 	"Danish"): a Lead's auto-created Contact is Dynamic-Linked to the LEAD,
 	not a Customer - this is the standard, common case (ERPNext creates a
-	Contact for every new Lead). find_party_by_last10 matches Contact Phone
+	Contact for every new Lead). find_party_by_phone matches Contact Phone
 	before it ever reaches Lead's own normalized fields, so for any Lead with
 	its auto-created Contact, the match always comes back as a bare Contact.
 	The Contact->Customer resolution below then finds nothing (there is no
@@ -236,7 +237,7 @@ def _pre_match_number(values):
 	formats).
 	"""
 	number = values.get("from") if values.get("type") == "Incoming" else values.get("to")
-	return find_party_by_last10(number)
+	return find_party_by_phone(number)
 
 
 def _insert_with_retry(name, values, user, device_id, device_call_id, payload):
@@ -280,6 +281,9 @@ def _insert_with_retry(name, values, user, device_id, device_call_id, payload):
 				doc = frappe.get_doc(dict(values))
 				if match:
 					doc.append("links", {"link_doctype": match["doctype"], "link_name": match["name"]})
+				# Party already resolved above: SplinhCallLog (override/call_log.py)
+				# skips stock before_insert's two unindexed LIKE scans.
+				doc.flags.splinh_party_resolved = True
 				doc.insert(ignore_permissions=False)
 				# doc.links is already populated in-memory at this point (our own
 				# pre-set link above, plus whatever Call Log's own before_insert

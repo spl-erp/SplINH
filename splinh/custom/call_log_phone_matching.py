@@ -1,148 +1,30 @@
-"""Normalized, indexed phone matching for Call Log's Lead/Customer auto-link.
+"""Call Log -> Lead/Customer auto-link helpers.
 
-Background (2026-09-26): stock ERPNext's `Call Log.before_insert()`
-(apps/erpnext/erpnext/telephony/doctype/call_log/call_log.py - core, never
-edited) matches the caller's number against Lead/Contact with an unindexable
-`LIKE '%number'` against the RAW stored phone value - dashes and all. Two real
-bugs came out of that:
+The number matching itself lives in `custom/phone_lookup.py` (an indexed
+`Phone Lookup` table: one exact lookup per call instead of a scan). What is left
+here is everything around it: making the resolved party a real Dynamic Link row,
+and the `rematch-call-logs` command that re-runs the match over existing records.
 
-  1. Performance: `LIKE '%number'` cannot use any index (confirmed via EXPLAIN:
-     type=ALL over the full Lead table, ~30s for a non-matching number on this
-     bench's ~35k Leads). See apps/splinh/splinh/api/call_tracking.py's
-     module docstring for the full story and why the actual insert was already
-     moved to a background job over this.
-  2. Correctness: because the stored value is compared WITHOUT stripping
-     non-digit characters, a stored number like "+91-9225144953" matches an
-     incoming bare 10-digit "9225144953" (the dash sits outside the 10-char
-     comparison window) but NOT the same real number written with a country
-     code and no separator, "919225144953" (the dash now sits exactly where
-     the 12-char window's 2nd character should be, so the suffix comparison
-     fails). Confirmed live: Contact Phone "DUMMY-DUMMY" stores
-     "+91-9225144953"; Call Log rows with to="9225144953" matched Customer
-     DUMMY, the three rows with to="919225144953" did not.
+History (2026-10): matching used to run at query time against the raw
+Lead/Contact phone columns - first stock ERPNext's unindexable `LIKE '%number'`,
+then our own `REGEXP_REPLACE ... RIGHT(...,10)` "last 10 digits" variant. Both
+scanned every row (~38s per call on this site's 260k Leads / 392k Contact Phone
+rows) and both got the country code wrong: "last 10 digits" cannot tell +1 from
++91 and silently dropped shorter numbers such as "+977-23455884". An earlier
+attempt to store the normalized value in indexed Custom Fields on `tabLead`
+failed too - the table is already at MariaDB's 65535-byte row limit, so the
+fields were never created and the failure was silent. The lookup table replaces
+all of it; no trace of the last-10 logic remains.
 
-Fix built here, in OUR app, not core: a normalized "last 10 digits, non-digit
-characters stripped" exact match, computed at QUERY TIME against the raw
-phone-ish fields that already exist (Lead.phone/mobile_no/whatsapp_no,
-Contact Phone.phone) via `_normalize_sql_expr()` below - no stored or virtual
-column of any kind (2026-10: an earlier version of this fix stored the
-normalized value in dedicated indexed Custom Fields; abandoned because
-`tabLead` is already too wide for another fixed-width column - adding one
-more hit MariaDB's 65535-byte max row size and silently failed on every
-`bench migrate`, which is what let this bug reach production undetected).
-See `find_party_by_last10()` below, and `api/call_tracking.py`'s
-push_calls/ingest_whatsapp_call for where the pre-insert lookup happens.
-
-IMPORTANT (confirmed live, 2026-09-26): Call Log's own before_insert is
-UNCONDITIONAL - it does not check whether self.customer or self.links are
-already populated before running its own slow/buggy match. Pre-setting
-doc.links before doc.insert() therefore does NOT skip or speed up core's own
-query - core's query still runs, at the same cost, every time. What
-pre-setting DOES do is guarantee the CORRECT result is what actually survives:
-core's before_insert only ever appends a link when it finds a match of its
-own; it never clears or overwrites an existing links row. So our normalized
-match, computed and applied via db_set AFTER insert() completes (in
-_resolve_linked_party, which already reads doc.links post-insert), is the
-right and sufficient place to apply this fix. The performance problem (core's
-own query still costing ~30s per insert) is unchanged by this fix and remains
-the separate, already-deferred-to-a-background-job, not-yet-scoped follow-up
-documented in call_tracking.py.
+IMPORTANT (confirmed live, 2026-09-26): stock Call Log's `before_insert` is
+UNCONDITIONAL - it never checks whether `self.links` is already populated, so
+pre-setting a link does not stop core running its own slow query. That is why
+`override/call_log.py` subclasses the controller to skip those scans outright
+for our own inserts. Core only ever APPENDS a link it finds; it never clears
+one, so a link we set before `.insert()` always survives.
 """
 
-import re
-
 import frappe
-
-_DIGITS_RE = re.compile(r"\D+")
-
-
-def last10(number):
-	"""Strip every non-digit character, then return the last 10 digits.
-
-	Returns None for anything with fewer than 10 digits left after stripping -
-	deliberately conservative: an ambiguous short number (extension, landline
-	fragment, etc.) should never produce a false-positive exact match. This
-	mirrors the same design used for the incoming number in
-	api/call_tracking.py's pre-insert lookup.
-	"""
-	if not number:
-		return None
-	digits = _DIGITS_RE.sub("", number)
-	if len(digits) < 10:
-		return None
-	return digits[-10:]
-
-
-# Lead has three separate raw phone-ish fields (unlike Contact, which has a
-# child table with one row per number) - or_filters across all three in stock
-# get_lead_with_phone_number. Priority order matches the old stored-column
-# design: phone, then mobile_no, then whatsapp_no.
-LEAD_PHONE_FIELDNAMES = ("phone", "mobile_no", "whatsapp_no")
-
-
-def _normalize_sql_expr(column):
-	"""SQL expression computing the same value as `last10()` above, directly
-	against a raw column - no stored/virtual column involved. Used by
-	find_party_by_last10() below as a query-time WHERE condition."""
-	stripped = f"REGEXP_REPLACE({column}, '[^0-9]', '')"
-	return f"IF(CHAR_LENGTH({stripped}) >= 10, RIGHT({stripped}, 10), NULL)"
-
-
-def find_party_by_last10(number):
-	"""Exact-match lookup against the SAME raw phone columns Lead/Contact
-	Phone already have - normalized at query time via `_normalize_sql_expr`,
-	never read from a separately stored column (2026-10: superseded the
-	stored-Custom-Field design - see the module docstring above for why).
-
-	Returns a dict {"doctype": "Lead"|"Contact", "name": ...} for the first
-	match found (Contact checked first, same priority stock's before_insert
-	effectively ends up with since Contact -> Customer is the most-resolved
-	party _resolve_linked_party can report), or None if nothing matches.
-
-	`key` is always passed as a bind parameter, never string-interpolated -
-	only the fixed, hardcoded column name is interpolated into the SQL text
-	via `_normalize_sql_expr`.
-
-	Performance note: this can no longer use a B-tree index - each call is a
-	full scan of the relevant table with REGEXP_REPLACE computed per row,
-	instead of an indexed exact match. Acceptable here because every caller
-	runs off the HTTP hot path: the live insert path already runs in a
-	background job (frappe.enqueue(..., queue="long", timeout=300) - see
-	api/call_tracking.py's own docstring, which already accounts for a
-	15-33s/call cost from stock's own before_insert match), and the other
-	caller (rematch_call_logs) runs from an explicit bench CLI command with
-	no timeout.
-	"""
-	key = last10(number)
-	if not key:
-		return None
-
-	contact = frappe.db.sql(
-		f"""
-		SELECT parent FROM `tabContact Phone`
-		WHERE {_normalize_sql_expr("phone")} = %(key)s
-		ORDER BY creation DESC
-		LIMIT 1
-		""",
-		{"key": key},
-	)
-	if contact:
-		return {"doctype": "Contact", "name": contact[0][0]}
-
-	for fieldname in LEAD_PHONE_FIELDNAMES:
-		lead = frappe.db.sql(
-			f"""
-			SELECT name FROM `tabLead`
-			WHERE {_normalize_sql_expr(fieldname)} = %(key)s
-			ORDER BY creation DESC
-			LIMIT 1
-			""",
-			{"key": key},
-		)
-		if lead:
-			return {"doctype": "Lead", "name": lead[0][0]}
-
-	return None
 
 
 def _call_log_number(doc):
@@ -263,8 +145,8 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 	     a human reviews it first. Never silently overwritten.
 
 	  2. CORRECT - every row with NEITHER customer NOR custom_lead set gets a
-	     fresh `find_party_by_last10` lookup (indexed exact match, never the
-	     old unindexed LIKE) and, if a real match exists, the link is
+	     fresh `find_party_by_phone` lookup (one indexed exact match) and, if
+	     a real match exists, the link is
 	     appended and the resolved party fields applied - same mechanics
 	     `rematch_unlinked_call_logs` used, just as one pass of this larger,
 	     full-scope command.
@@ -280,6 +162,7 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 	would skip rows.
 	"""
 	from splinh.api.call_tracking import _resolve_linked_party
+	from splinh.custom.phone_lookup import find_party_by_phone
 
 	def _neither_count():
 		return frappe.db.sql(
@@ -387,7 +270,7 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 			for name in names:
 				doc = frappe.get_doc("Call Log", name)
 				number = _call_log_number(doc)
-				match = find_party_by_last10(number)
+				match = find_party_by_phone(number)
 				result["scanned_unlinked"] += 1
 				if not match:
 					continue

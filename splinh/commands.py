@@ -145,7 +145,7 @@ def list_doctypes(context, like=None):
 @pass_context
 def rematch_call_logs_command(context, dry_run=False, batch_size=500):
 	"""Re-run the fixed Customer > Lead > neither Call Log/Lead/Customer phone
-	matching (2026-09-26 normalized-last10 fix) across every Call Log record
+	matching across every Call Log record
 	synced to date.
 
 	Idempotent and safe to re-run any time more matching fixes land later:
@@ -338,4 +338,36 @@ def verify_live_code_command(context, paths):
 	click.echo("All matching processes postdate every file checked - safe to trust live behaviour.")
 
 
-commands = [export_doctype, list_doctypes, rematch_call_logs_command, verify_live_code_command]
+@click.command("rebuild-phone-lookup")
+@click.option("--dry-run", is_flag=True, default=False, help="Report what would change; write nothing.")
+@click.option("--batch-size", default=2000, show_default=True)
+@click.option("--resume", is_flag=True, default=False, help="Continue an interrupted run.")
+@pass_context
+def rebuild_phone_lookup_command(context, dry_run=False, batch_size=2000, resume=False):
+	"""Build or repair the Phone Lookup table from every Lead and Contact.
+
+	Batched, restartable and idempotent - run it as often as you like (also the
+	repair after any raw-SQL change to phones). Never touches Lead/Contact data.
+	"""
+	from splinh.custom.phone_lookup import reconcile
+
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		stats = reconcile(fix=not dry_run, batch_size=batch_size, resume=resume, log=click.echo)
+		click.echo("\n" + ("DRY RUN - nothing written" if dry_run else "Applied"))
+		for key in ("records_scanned", "rows_expected", "rows_missing", "rows_stale", "rows_orphaned", "unusable", "bare", "table_rows", "seconds"):
+			click.echo(f"  {key:16} {stats[key]}")
+		for line in stats["unusable_sample"]:
+			click.echo(f"  not indexed: {line}")
+	finally:
+		frappe.destroy()
+
+
+commands = [
+	export_doctype,
+	list_doctypes,
+	rematch_call_logs_command,
+	verify_live_code_command,
+	rebuild_phone_lookup_command,
+]

@@ -6,11 +6,26 @@ app_email = "support@splashjetink.com"
 app_license = "mit"
 
 doc_events = {
+	# Phone Lookup (indexed number -> Lead/Contact table) - see custom/phone_lookup.py.
+	"Contact": {
+		"on_update": "splinh.custom.phone_lookup.sync_document",
+		"on_trash": "splinh.custom.phone_lookup.delete_document",
+	},
+	"Lead": {
+		"on_update": "splinh.custom.phone_lookup.sync_document",
+		"on_trash": "splinh.custom.phone_lookup.delete_document",
+	},
 	# Manager-review fields - see custom/call_log_manager_review.py and
 	# _ensure_call_manager_review_fields() in custom/splinh_setup.py.
 	"Call Log": {
 		"validate": "splinh.custom.call_log_manager_review.sync_manager_remarked_flag"
 	},
+}
+
+# Skip stock Call Log.before_insert's two unindexed phone scans for inserts that
+# already resolved their party - see override/call_log.py.
+override_doctype_class = {
+	"Call Log": "splinh.override.call_log.SplinhCallLog",
 }
 
 # Surfaces linked Call Log entries on a Lead/Customer's own Connections tab -

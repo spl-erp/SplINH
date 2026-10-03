@@ -1,0 +1,94 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-03 20:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "phone_key",
+  "source_doctype",
+  "source_name",
+  "column_break_pl1",
+  "source_field",
+  "source_rank",
+  "field_rank",
+  "source_creation"
+ ],
+ "fields": [
+  {
+   "fieldname": "phone_key",
+   "fieldtype": "Data",
+   "label": "Phone Key",
+   "length": 24,
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Canonical +<digits> form of the number (see custom/phone_normalize.py). The indexed lookup column."
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Select",
+   "label": "Source DocType",
+   "options": "Contact\nLead",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Data",
+   "label": "Source Record",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_pl1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "source_field",
+   "fieldtype": "Data",
+   "label": "Source Field",
+   "description": "phone_nos (Contact) or phone / mobile_no / whatsapp_no (Lead) - the lowest-ranked field that holds this number."
+  },
+  {
+   "fieldname": "source_rank",
+   "fieldtype": "Int",
+   "label": "Source Rank",
+   "description": "1 = Contact, 2 = Lead. Lower wins when several records share a number."
+  },
+  {
+   "fieldname": "field_rank",
+   "fieldtype": "Int",
+   "label": "Field Rank",
+   "description": "phone = 1, mobile_no = 2, whatsapp_no = 3. Lower wins."
+  },
+  {
+   "fieldname": "source_creation",
+   "fieldtype": "Datetime",
+   "label": "Source Creation",
+   "description": "Newest record wins a tie (same as stock ERPNext's creation-desc rule)."
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-03 20:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "Phone Lookup",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
