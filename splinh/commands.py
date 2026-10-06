@@ -364,10 +364,91 @@ def rebuild_phone_lookup_command(context, dry_run=False, batch_size=2000, resume
 		frappe.destroy()
 
 
+@click.command("ai-process-call")
+@click.argument("call_log_name")
+@click.option(
+	"--mode",
+	type=click.Choice(["two_step", "one_pass"]),
+	default="two_step",
+	show_default=True,
+	help="two_step = speech model then summary model; one_pass = a single call on the audio.",
+)
+@click.option("--transcribe-model", default=None, help="Override the speech model for this run.")
+@click.option("--summary-model", default=None, help="Override the summary model for this run.")
+@click.option("--no-diarize", is_flag=True, default=False, help="Plain transcript without speaker labels.")
+@click.option("--save", is_flag=True, default=False, help="Write the result to the Call Log (default: print only).")
+@pass_context
+def ai_process_call_command(context, call_log_name, mode, transcribe_model, summary_model, no_diarize, save):
+	"""Run the Gemini transcript + summary on ONE Call Log and print what came back
+	(transcript, insights, tokens, estimated cost). Needs gemini_api_key in site_config.
+	Prototype / model comparison tool: it writes nothing unless --save is given."""
+	from splinh.custom import call_ai
+
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		overrides = {}
+		if transcribe_model:
+			overrides["transcribe"] = transcribe_model
+		if summary_model:
+			overrides["summary"] = summary_model
+		if overrides:
+			frappe.local.conf["splinh_ai_models"] = {**(frappe.conf.get("splinh_ai_models") or {}), **overrides}
+
+		try:
+			result = call_ai.process_call(call_log_name, mode=mode, diarize=False if no_diarize else None)
+		except call_ai.AIError as e:
+			click.echo(f"FAILED: {e}")
+			raise SystemExit(1)
+
+		transcript = result["transcript"]
+		click.echo(f"models: {result['models']}   mode: {result['mode']}   diarized: {result['diarized']}   {result['seconds']}s")
+		click.echo(f"transcript: {len(transcript)} characters, Devanagari present: {bool(call_ai._DEVANAGARI.search(transcript))}")
+		click.echo("----- transcript (first 1500 chars) -----")
+		click.echo(transcript[:1500])
+		click.echo("----- summary -----")
+		click.echo(result["insights"]["summary"])
+		click.echo("----- insights -----")
+		click.echo(result["insights_text"])
+		click.echo("----- usage -----")
+		for u in result["usage"]:
+			click.echo(f"  {u}")
+		click.echo(f"estimated cost: ${result['cost_usd']}")
+		if save:
+			call_ai.save_result(call_log_name, result)
+			frappe.db.commit()
+			click.echo("saved to the Call Log")
+	finally:
+		frappe.destroy()
+
+
+@click.command("backfill-call-employee")
+@click.option("--dry-run", is_flag=True, default=False, help="List what would change; write nothing.")
+@pass_context
+def backfill_call_employee_command(context, dry_run=False):
+	"""Fill blank Call Log.call_received_by from the call's owner (Employee.user_id,
+	else the user's single Employee permission). Only rows where it is empty."""
+	from splinh.custom.call_employee import backfill
+
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		stats = backfill(fix=not dry_run, log=click.echo)
+		click.echo("\n" + ("DRY RUN - nothing written" if dry_run else "Applied"))
+		click.echo(f"  rows fixed        {stats['rows_fixed']}")
+		click.echo(f"  rows unresolvable {stats['rows_unresolvable']}")
+		for line in stats["unresolvable"]:
+			click.echo(f"  no employee: {line}")
+	finally:
+		frappe.destroy()
+
+
 commands = [
 	export_doctype,
 	list_doctypes,
 	rematch_call_logs_command,
 	verify_live_code_command,
 	rebuild_phone_lookup_command,
+	backfill_call_employee_command,
+	ai_process_call_command,
 ]

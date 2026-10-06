@@ -1,0 +1,172 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-10-04 20:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "section_key",
+  "gemini_api_key",
+  "key_help",
+  "section_models",
+  "transcribe_model",
+  "summary_model",
+  "column_break_models",
+  "thinking_level",
+  "language_codes",
+  "section_options",
+  "diarization",
+  "romanize",
+  "column_break_options",
+  "glossary",
+  "section_limits",
+  "min_seconds",
+  "max_seconds",
+  "column_break_limits",
+  "daily_limit"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "description": "Untick to stop all AI transcription and summaries (the button will refuse to run).",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enable AI call analysis"
+  },
+  {
+   "fieldname": "section_key",
+   "fieldtype": "Section Break",
+   "label": "Gemini API key"
+  },
+  {
+   "fieldname": "gemini_api_key",
+   "fieldtype": "Password",
+   "label": "Gemini API Key",
+   "description": "Stored encrypted. Shown masked after saving; to change it, type a new key and save."
+  },
+  {
+   "fieldname": "key_help",
+   "fieldtype": "HTML",
+   "options": "<p class=\"text-muted\">Create a key at <a href=\"https://aistudio.google.com/apikey\" target=\"_blank\" rel=\"noopener\">aistudio.google.com/apikey</a>. It must belong to a <b>billed</b> Google project: on the free tier Google may use call audio to improve its products. Use <b>Test connection</b> (top of the page) before saving."
+  },
+  {
+   "fieldname": "section_models",
+   "fieldtype": "Section Break",
+   "label": "Models"
+  },
+  {
+   "default": "gemini-3.5-transcribe",
+   "description": "Speech-to-text model.",
+   "fieldname": "transcribe_model",
+   "fieldtype": "Data",
+   "label": "Transcription Model"
+  },
+  {
+   "default": "gemini-3.5-flash-lite",
+   "description": "Model that writes the summary and key insights.",
+   "fieldname": "summary_model",
+   "fieldtype": "Data",
+   "label": "Summary Model"
+  },
+  {
+   "fieldname": "column_break_models",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "low",
+   "fieldname": "thinking_level",
+   "fieldtype": "Select",
+   "label": "Thinking Level",
+   "options": "\nminimal\nlow\nmedium\nhigh",
+   "description": "How much the summary model reasons before answering. Higher costs more."
+  },
+  {
+   "description": "Optional hints, e.g. hi-IN, en-IN (comma separated). Leave empty to detect the language automatically (best for Hindi/English mixing).",
+   "fieldname": "language_codes",
+   "fieldtype": "Data",
+   "label": "Language Hints"
+  },
+  {
+   "fieldname": "section_options",
+   "fieldtype": "Section Break",
+   "label": "Quality options"
+  },
+  {
+   "default": "0",
+   "description": "Off by default: the speaker turns currently come back without labels and run together, so the plain transcript reads better. Only used for calls up to 30 minutes (Google's limit).",
+   "fieldname": "diarization",
+   "fieldtype": "Check",
+   "label": "Speaker labels"
+  },
+  {
+   "default": "1",
+   "description": "Write Hindi in Roman letters (Hinglish) if the transcript comes back in Devanagari.",
+   "fieldname": "romanize",
+   "fieldtype": "Check",
+   "label": "Romanize Hindi"
+  },
+  {
+   "fieldname": "column_break_options",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Product, brand and model names, comma separated, so they are spelled correctly in the summary.",
+   "fieldname": "glossary",
+   "fieldtype": "Small Text",
+   "label": "Glossary"
+  },
+  {
+   "fieldname": "section_limits",
+   "fieldtype": "Section Break",
+   "label": "Limits"
+  },
+  {
+   "default": "10",
+   "description": "Calls shorter than this are refused (too short to contain a conversation).",
+   "fieldname": "min_seconds",
+   "fieldtype": "Int",
+   "label": "Minimum Call Length (seconds)"
+  },
+  {
+   "description": "Leave empty for no maximum. Google's speech model accepts up to 1 hour per call.",
+   "fieldname": "max_seconds",
+   "fieldtype": "Int",
+   "label": "Maximum Call Length (seconds)"
+  },
+  {
+   "fieldname": "column_break_limits",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "100",
+   "description": "How many analyses one user can start per day.",
+   "fieldname": "daily_limit",
+   "fieldtype": "Int",
+   "label": "Daily Limit per User"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-04 20:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "SplINH Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 0,
+   "print": 0,
+   "read": 1,
+   "role": "System Manager",
+   "share": 0,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

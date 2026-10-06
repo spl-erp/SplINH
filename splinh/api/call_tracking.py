@@ -52,10 +52,10 @@ import traceback
 from urllib.parse import unquote
 
 import frappe
-import requests
 from frappe.utils import cint, get_bench_path, get_datetime
 from frappe.utils.file_manager import save_file
 
+from splinh.custom.call_employee import employee_for_user
 from splinh.custom.call_log_phone_matching import ensure_dynamic_link
 from splinh.custom.phone_lookup import find_party_by_phone
 
@@ -284,6 +284,14 @@ def _insert_with_retry(name, values, user, device_id, device_call_id, payload):
 				# Party already resolved above: SplinhCallLog (override/call_log.py)
 				# skips stock before_insert's two unindexed LIKE scans.
 				doc.flags.splinh_party_resolved = True
+				# Who made/took the call: the caller's own Employee, for Incoming and
+				# Outgoing alike (custom/call_employee.py). Never overrides a value sent.
+				if not doc.get("call_received_by"):
+					employee, employee_user = employee_for_user(user)
+					if employee:
+						doc.call_received_by = employee
+						if employee_user and not doc.get("employee_user_id"):
+							doc.employee_user_id = employee_user
 				doc.insert(ignore_permissions=False)
 				# doc.links is already populated in-memory at this point (our own
 				# pre-set link above, plus whatever Call Log's own before_insert
@@ -592,35 +600,43 @@ def get_my_api_credentials():
 	return {"api_key": user_doc.api_key, "api_secret": api_secret}
 
 
-# --- Call transcription (2026-09-29) -------------------------------------------
-# Same shape as push_calls/ingest_whatsapp_call, and for the same reason: the local
-# transcription service (127.0.0.1:8100, standalone - see calltranscribe/, not this
-# app) takes 1.5-3+ minutes per call. A phone-facing endpoint that waits on that
-# synchronously would tie up a gunicorn worker for that long and time out
-# client-side exactly like the pre-2026-09-24 push_calls did - so this endpoint only
-# ever accepts the recording, queues the transcription, and returns immediately.
-#
-# Deliberately no separate "Call Transcription Failure" doctype (unlike Call Sync
-# Failure): that doctype exists because a failed push_calls insert means the Call
-# Log row itself was never created - there. Here the Call Log already exists (it's
-# created by push_calls/ingest_whatsapp_call well before a recording arrives), so
-# there's always a real record to carry the status/error directly - a second
-# doctype would just be an unnecessary indirection.
+# --- Call recording upload ------------------------------------------------------
+# The phone uploads the recording as a separate request after the call data (it is far
+# larger than the JSON, and an upload failure must never fail the call sync). Turning
+# a recording into a transcript/summary is a separate, on-demand step:
+# api/call_ai.py + custom/call_ai.py.
 
-TRANSCRIBE_SERVICE_URL = "http://127.0.0.1:8100/transcribe"
-TRANSCRIBE_TIMEOUT_SECONDS = 600  # matches calltranscribe's own gunicorn -t 600
-TRANSCRIBE_MODEL_LABEL = "ai4bharat/indic-conformer-600m-multilingual@e9b71b369c04"
+
+def _log_recording_upload(event, call_log_name, **extra):
+	"""TEMPORARY DIAGNOSTIC (2026-10-04): one line per recording upload in
+	logs/recording_upload.log - the Call Log name the phone asked for, what the
+	request carried (form fields, file fields, size) and what the server did with it.
+	Failed uploads otherwise leave no trace at all: frappe.throw() answers 404/417
+	without an Error Log entry, so "recordings are not arriving" could not be told
+	apart from "arriving for the wrong name". Never logs headers or credentials.
+	Remove once the recording problem is understood. Logging can never affect the
+	upload: any error here is swallowed.
+	"""
+	try:
+		request = frappe.request
+		log = frappe.logger("recording_upload")
+		log.setLevel("INFO")  # default resolved level here is ERROR - .info() would be dropped
+		details = " ".join(f"{key}={value!r}" for key, value in extra.items())
+		log.info(
+			f"{event} | call_log_name={call_log_name!r} user={frappe.session.user} "
+			f"content_type={request.content_type!r} content_length={request.content_length} "
+			f"form_fields={sorted(request.form.keys())} file_fields={sorted(request.files.keys())} {details}"
+		)
+	except Exception:
+		pass
 
 
 @frappe.whitelist(methods=["POST"])
 def receive_call_recording(call_log_name):
 	"""Phone uploads a call recording here (multipart field `audio_file`), same
 	token auth as push_calls. Attaches the recording as a private File on the Call
-	Log (durable source of truth for the background job, and gives free playback
-	in the Call Log form - not asked for, but a natural side effect of using
-	Frappe's own save_file rather than passing raw bytes through the queue), sets
-	custom_transcript_status to Pending, and queues the actual transcription.
-	Returns immediately - never waits on the transcription itself.
+	Log (gives free playback in the Call Log form). Transcription is not done here -
+	see the "Transcribe & Summarize" button (api/call_ai.py).
 
 	Permission check is `frappe.has_permission` (not a raw exists() check) so the
 	existing if_owner rule on Call Tracker User (only your own synced calls) is
@@ -640,17 +656,20 @@ def receive_call_recording(call_log_name):
 	_ensure_absolute_site_path()'s own docstring for the full mechanism.
 	"""
 	_ensure_absolute_site_path()
+	_log_recording_upload("received", call_log_name)
 
 	if not frappe.db.exists("Call Log", call_log_name):
+		_log_recording_upload("REJECTED: no Call Log with this name", call_log_name)
 		frappe.throw(f"Call Log {call_log_name} not found", frappe.DoesNotExistError)
 	if not frappe.has_permission("Call Log", ptype="read", doc=call_log_name):
+		_log_recording_upload("REJECTED: no read permission", call_log_name)
 		raise frappe.PermissionError
 
 	uploaded = frappe.request.files.get("audio_file")
 	if not uploaded:
+		_log_recording_upload("REJECTED: no audio_file in the upload", call_log_name)
 		frappe.throw("Missing 'audio_file' in the upload.")
 
-	user = frappe.session.user
 	content = uploaded.read()
 
 	# REAL ROOT CAUSE, confirmed live (2026-09-29) via a captured traceback (see
@@ -685,29 +704,21 @@ def receive_call_recording(call_log_name):
 		)
 		raise
 
-	# Raw db.set_value, not a permission-checked save() - same precedent as the
-	# rest of this module (e.g. _insert_with_retry's db_set calls): Call Tracker
-	# User only has create+if_owner-read on Call Log, no write, and this is a
-	# system-tracked status, not user-authored content.
-	frappe.db.set_value("Call Log", call_log_name, "custom_transcript_status", "Pending", update_modified=False)
-
-	frappe.enqueue(
-		_transcribe_call_recording_job,
-		queue="long",
-		timeout=TRANSCRIBE_TIMEOUT_SECONDS + 60,
-		enqueue_after_commit=True,
-		call_log_name=call_log_name,
-		file_name=file_doc.name,
-		user=user,
+	_log_recording_upload(
+		"STORED", call_log_name, file=file_doc.name, filename=uploaded.filename, bytes=len(content)
 	)
 
+	# No transcription is queued here any more (2026-10-04): the local service this used
+	# to call is gone, and transcribing every call at upload time is not wanted for now.
+	# A manager runs it on demand from the "Transcribe & Summarize" button on the Call
+	# Log (api/call_ai.py). The response shape is unchanged for the mobile app.
 	return {"status": "queued", "call_log_name": call_log_name}
 
 
 def _ensure_absolute_site_path():
 	"""Correct frappe.local.site_path to an absolute path before any File API call
 	- in BOTH receive_call_recording (web request) and
-	_transcribe_call_recording_job (background job). Call it first thing in any
+	any background job that reads a File (custom/call_ai.py does it itself). Call it first thing in any
 	new code path in this app that touches File content too.
 
 	Mechanism: frappe.init()'s default sites_path="." resolves relative to the
@@ -765,68 +776,3 @@ def _ensure_absolute_site_path():
 	)
 	frappe.local.site_path = os.path.join(get_bench_path(), "sites", frappe.local.site)
 	_diag.info(f"site_path_after={frappe.local.site_path!r}")
-
-
-def _transcribe_call_recording_job(call_log_name, file_name, user):
-	"""Background job: POST the already-saved recording to the local transcription
-	service, then write the result straight onto the Call Log - no second
-	round-trip through the phone needed, unlike an earlier attach_call_transcript
-	sketch that would have required the phone to fetch and re-submit the text.
-
-	Runs as `user` for reading the File (real caller's own permissions, matching
-	_insert_with_retry's convention), but switches to Administrator - same as that
-	function's Call Sync Failure write - for the final status/transcript write,
-	since this is system-computed output, not something scoped to the caller's own
-	permissions.
-
-	Single attempt, no retry loop: unlike the transient DB lock-wait errors
-	_insert_with_retry retries for, a failure here (service down, decode error,
-	timeout) is not expected to resolve itself moments later, and each attempt
-	already costs minutes - a blind retry would just as likely double a genuine
-	failure's cost as fix it.
-	"""
-	frappe.set_user(user)
-	try:
-		_ensure_absolute_site_path()
-		file_doc = frappe.get_doc("File", file_name)
-		content = file_doc.get_content()
-
-		response = requests.post(
-			TRANSCRIBE_SERVICE_URL,
-			files={"audio": (file_doc.file_name, content)},
-			data={"lang": "hi", "mode": "ctc"},
-			timeout=TRANSCRIBE_TIMEOUT_SECONDS,
-		)
-		response.raise_for_status()
-		result = response.json()
-		if "transcript" not in result:
-			frappe.throw(f"Unexpected response from transcription service: {result!r}")
-
-		frappe.set_user("Administrator")
-		frappe.db.set_value(
-			"Call Log",
-			call_log_name,
-			{
-				"custom_transcript": result["transcript"],
-				"custom_transcript_status": "Completed",
-				"custom_transcript_language": result.get("lang", "hi"),
-				"custom_transcript_model": TRANSCRIBE_MODEL_LABEL,
-			},
-			update_modified=False,
-		)
-		frappe.db.commit()
-	except Exception as e:
-		frappe.set_user("Administrator")
-		frappe.db.set_value(
-			"Call Log",
-			call_log_name,
-			{"custom_transcript_status": "Failed", "custom_transcript_error": str(e)[:1000]},
-			update_modified=False,
-		)
-		frappe.db.commit()
-		frappe.log_error(
-			title="splinh call_tracking: transcription failed",
-			message=f"call_log_name={call_log_name} file_name={file_name} error={e}",
-		)
-	finally:
-		frappe.set_user("Administrator")

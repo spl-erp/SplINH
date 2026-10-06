@@ -91,6 +91,7 @@ def execute():
 		ensure_call_tracking,
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
+		_ensure_call_ai,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
 		ensure_call_monitoring_detailed_page,
@@ -2592,6 +2593,163 @@ def _ensure_call_recording_player():
 			"enabled": 1,
 			"script": CALL_RECORDING_PLAYER_JS,
 		},
+	)
+
+
+# ------------------------------------------------------------ Call AI insights
+
+# "Transcribe & Summarize" button on Call Log (2026-10-04). The work itself is in
+# api/call_ai.py (the click) and custom/call_ai.py (the Gemini pipeline). Results land
+# in the transcript fields defined above plus the fields below, all read-only: they
+# are system-computed and written by raw set_value (managers have no permlevel-0
+# write on Call Log - see _ensure_call_tracking_permissions()).
+CALL_AI_STATUS_OPTIONS = "\nPending\nProcessing\nCompleted\nFailed\nSkipped"
+
+CALL_AI_FIELDS = [
+	{
+		"fieldname": "custom_ai_section",
+		"label": "AI Call Insights",
+		"fieldtype": "Section Break",
+		"insert_after": "custom_transcript_error",
+	},
+	{
+		"fieldname": "custom_ai_summary",
+		"label": "AI Summary",
+		"fieldtype": "Text",
+		"insert_after": "custom_ai_section",
+		"read_only": 1,
+	},
+	{
+		"fieldname": "custom_interest_level",
+		"label": "Interest Level",
+		"fieldtype": "Select",
+		"options": "\nHot\nWarm\nCold\nNone",
+		"insert_after": "custom_ai_summary",
+		"in_standard_filter": 1,
+		"read_only": 1,
+	},
+	{
+		"fieldname": "custom_next_step",
+		"label": "Next Step",
+		"fieldtype": "Small Text",
+		"insert_after": "custom_interest_level",
+		"read_only": 1,
+	},
+	{
+		"fieldname": "custom_ai_insights",
+		"label": "Key Insights",
+		"fieldtype": "Text",
+		"insert_after": "custom_next_step",
+		"read_only": 1,
+	},
+	{
+		"fieldname": "custom_ai_insights_json",
+		"label": "Insights (structured)",
+		"fieldtype": "Code",
+		"options": "JSON",
+		"insert_after": "custom_ai_insights",
+		"read_only": 1,
+	},
+	{
+		"fieldname": "custom_ai_usage",
+		"label": "AI Usage",
+		"fieldtype": "Small Text",
+		"description": "Models, token counts and estimated cost (USD) of the last run.",
+		"insert_after": "custom_ai_insights_json",
+		"read_only": 1,
+	},
+]
+
+CALL_AI_SCRIPT = "Call Log AI Insights"
+CALL_AI_JS = """// Managed by splinh.custom.splinh_setup - edits here are overwritten on migrate.
+// "Transcribe & Summarize" button on Call Log. The server (splinh.api.call_ai) re-checks
+// the role, the recording and the call length - hiding the button is only a convenience.
+frappe.realtime.on("splinh_call_ai_done", (data) => {
+	if (window.cur_frm && cur_frm.doctype === "Call Log" && cur_frm.doc.name === data.name) {
+		cur_frm.reload_doc();
+	}
+});
+
+frappe.ui.form.on("Call Log", {
+	refresh(frm) {
+		if (frm.__ai_poll) {
+			clearInterval(frm.__ai_poll);
+			frm.__ai_poll = null;
+		}
+		if (frm.is_new()) return;
+		const allowed = ["Call Tracker Manager", "System Manager"].some((r) => frappe.user.has_role(r));
+		if (!allowed) return;
+
+		const status = frm.doc.custom_transcript_status;
+		if (status === "Processing") {
+			frm.set_intro(__("Transcribing and summarizing this call... the page updates when it is done."), "blue");
+			// Fallback in case the realtime message is missed.
+			frm.__ai_poll = setInterval(() => {
+				if (window.cur_frm !== frm) {
+					clearInterval(frm.__ai_poll);
+					return;
+				}
+				frm.reload_doc();
+			}, 10000);
+			return;
+		}
+
+		if (status === "Failed") {
+			const error = frm.doc.custom_transcript_error || "";
+			frm.set_intro(
+				__("The last attempt failed: {0}. Use AI > Retry to run it again.", [frappe.utils.escape_html(error.slice(0, 300))]),
+				"red"
+			);
+		}
+		const label =
+			status === "Completed"
+				? __("Re-run Transcribe & Summarize")
+				: status === "Failed"
+				? __("Retry Transcribe & Summarize")
+				: __("Transcribe & Summarize");
+		frm.add_custom_button(
+			label,
+			() => {
+				const run = () =>
+					frappe
+						.call({
+							method: "splinh.api.call_ai.transcribe_and_summarize",
+							args: {call_log_name: frm.doc.name},
+							freeze: true,
+							freeze_message: __("Starting..."),
+						})
+						.then(() => {
+							frappe.show_alert({message: __("Started. The result appears here in about a minute."), indicator: "blue"});
+							frm.reload_doc();
+						});
+				if (status === "Completed") {
+					frappe.confirm(__("This replaces the existing transcript and summary. Run again?"), run);
+				} else {
+					run();
+				}
+			},
+			__("AI")
+		);
+	},
+});
+"""
+
+
+def _ensure_call_ai():
+	for df in CALL_AI_FIELDS:
+		name = f"Call Log-{df['fieldname']}"
+		if frappe.db.exists("Custom Field", name):
+			continue
+		frappe.get_doc({"doctype": "Custom Field", "dt": "Call Log", "is_system_generated": 0, **df}).insert(
+			ignore_permissions=True
+		)
+	# Pending stays (rows set by the retired local transcription service); Processing and
+	# Skipped are added for the button.
+	_set_custom_field_props("Call Log", "custom_transcript_status", {"options": CALL_AI_STATUS_OPTIONS})
+	_upsert(
+		"Client Script",
+		CALL_AI_SCRIPT,
+		{"dt": "Call Log", "view": "Form", "enabled": 1, "script": CALL_AI_JS},
 	)
 
 
