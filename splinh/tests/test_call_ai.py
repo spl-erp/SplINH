@@ -186,5 +186,40 @@ class TestFallbacks(unittest.TestCase):
 				call_ai._transcribe({"uri": "u"}, ("audio/mp4",), False, [])
 
 
+class TestSpeechModelFallback(unittest.TestCase):
+	def test_only_the_thinking_fault_triggers_it(self):
+		thinking = call_ai.AIError('Gemini API 400: {"message":"Thinking is not enabled for this model"}', 400)
+		self.assertTrue(call_ai._speech_model_unavailable(thinking))
+		self.assertFalse(call_ai._speech_model_unavailable(call_ai.AIError("Gemini API 400: bad mime", 400)))
+		self.assertFalse(call_ai._speech_model_unavailable(call_ai.AIError("Thinking is not enabled", 500)))
+		self.assertFalse(call_ai._speech_model_unavailable(call_ai.AIError("quota", 429)))
+
+	def test_process_call_falls_back_to_one_pass(self):
+		insights = {"summary": "s"}
+		thinking = call_ai.AIError("Gemini API 400: Thinking is not enabled for this model", 400)
+		patches = dict(
+			api_key=lambda: "k",
+			latest_audio_file=lambda n: mock.Mock(file_name="a.m4a", name="F1"),
+			_call_context=lambda n: ({}, 60),
+			_upload_audio=lambda c, m, d: {"uri": "u", "name": "files/x", "mimeType": "audio/mp4"},
+			_delete_file=lambda f: None,
+			_transcribe=mock.Mock(side_effect=thinking),
+			_run_one_pass=lambda *a: ("hello", insights),
+			format_insights=lambda i: "text",
+			conf=lambda k, d=None: d,
+		)
+		fake_file = mock.Mock()
+		fake_file.get_content.return_value = b"x"
+		with mock.patch.multiple(call_ai, **patches), mock.patch.object(call_ai.frappe, "get_doc", return_value=fake_file), mock.patch.object(
+			call_ai.frappe, "local", mock.Mock(site="s")
+		):
+			insights_result = dict(insights, language="en", interest_level="Low")
+			with mock.patch.object(call_ai, "_run_one_pass", lambda *a: ("hello", insights_result)):
+				result = call_ai.process_call("CL-1")
+		self.assertEqual(result["mode"], "one_pass")
+		self.assertEqual(result["transcript"], "hello")
+		self.assertFalse(result["diarized"])
+
+
 if __name__ == "__main__":
 	unittest.main()

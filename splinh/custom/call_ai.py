@@ -1,4 +1,4 @@
-  """Transcript + sales-call summary for a Call Log recording, via the Gemini API.
+"""Transcript + sales-call summary for a Call Log recording, via the Gemini API.
 
 Triggered by the "Transcribe & Summarize" button on the Call Log form
 (api/call_ai.py) - on demand, never automatically at insert time. Automating it
@@ -536,6 +536,26 @@ def _call_context(call_log_name):
 	}, int(row.duration or 0)
 
 
+def _speech_model_unavailable(error):
+	"""True for the Google-side fault where the speech model refuses a normal request."""
+	return error.status == 400 and "thinking" in str(error).lower()
+
+
+def _run_one_pass(file, mime, context, usage_log):
+	"""Transcript + insights from one call on the audio (text model). -> (transcript, insights)."""
+	result_text = _one_pass(file, mime, context, usage_log)
+	try:
+		data_json = json.loads(result_text)
+	except ValueError:
+		raise AIError("The model did not return valid JSON.")
+	if not isinstance(data_json, dict):
+		raise AIError("The model returned an unexpected shape.")
+	transcript = str(data_json.pop("transcript", "")).strip()
+	if not transcript:
+		raise AIError("The model returned an empty transcript (silence or unusable audio).")
+	return transcript, parse_insights(json.dumps(data_json))
+
+
 def process_call(call_log_name, *, mode="two_step", diarize=None):
 	"""Run the pipeline and return the result. Writes nothing to the database.
 
@@ -576,32 +596,35 @@ def process_call(call_log_name, *, mode="two_step", diarize=None):
 		upload_mime = file.get("mimeType") or mimes[0]
 
 		if mode == "one_pass":
-			result_text = _one_pass(file, upload_mime, context, usage_log)
-			try:
-				data_json = json.loads(result_text)
-			except ValueError:
-				raise AIError("The model did not return valid JSON.")
-			if not isinstance(data_json, dict):
-				raise AIError("The model returned an unexpected shape.")
-			transcript = str(data_json.pop("transcript", "")).strip()
-			if not transcript:
-				raise AIError("The model returned an empty transcript (silence or unusable audio).")
-			insights = parse_insights(json.dumps(data_json))
+			transcript, insights = _run_one_pass(file, upload_mime, context, usage_log)
 		else:
-			transcript = _transcribe(file, (upload_mime,) + tuple(m for m in mimes if m != upload_mime), diarize, usage_log)
-			if not transcript:
-				raise AIError("The speech model returned an empty transcript (silence or unusable audio).")
-			transcript = _romanize(transcript, usage_log)
-			insights = parse_insights(
-				_text_call(
-					models()["summary"],
-					SUMMARY_SYSTEM,
-					_summary_prompt(transcript, context),
-					usage_log,
-					schema=INSIGHTS_SCHEMA,
-					max_tokens=4096,
+			try:
+				transcript = _transcribe(
+					file, (upload_mime,) + tuple(m for m in mimes if m != upload_mime), diarize, usage_log
 				)
-			)
+			except AIError as e:
+				if not _speech_model_unavailable(e):
+					raise
+				# Google's speech model rejecting every request ("Thinking is not enabled for this
+				# model", seen 2026-10-07 on requests that worked the day before): do the whole
+				# job in one pass with the text model instead of failing the call.
+				mode = "one_pass"
+				diarize = False
+				transcript, insights = _run_one_pass(file, upload_mime, context, usage_log)
+			else:
+				if not transcript:
+					raise AIError("The speech model returned an empty transcript (silence or unusable audio).")
+				transcript = _romanize(transcript, usage_log)
+				insights = parse_insights(
+					_text_call(
+						models()["summary"],
+						SUMMARY_SYSTEM,
+						_summary_prompt(transcript, context),
+						usage_log,
+						schema=INSIGHTS_SCHEMA,
+						max_tokens=4096,
+					)
+				)
 	finally:
 		_delete_file(file)
 
@@ -620,7 +643,7 @@ def process_call(call_log_name, *, mode="two_step", diarize=None):
 
 
 def _one_pass(file, mime, context, usage_log):
-	"""Bake-off only: transcript + insights from one call on the audio."""
+	"""Transcript + insights from one call on the audio (the fallback when the speech model is unavailable)."""
 	schema = json.loads(json.dumps(INSIGHTS_SCHEMA))
 	schema["properties"]["transcript"] = {
 		"type": "string",
