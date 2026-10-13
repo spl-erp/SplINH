@@ -34,11 +34,7 @@
   "whatsapp_chat_duration",
   "whatsapp_chat_notes",
   "other_activity_section",
-  "other_activity_type",
-  "other_activity_count",
-  "other_activity_column",
-  "other_activity_duration",
-  "other_activity_summary"
+  "other_activities"
  ],
  "fields": [
   {
@@ -237,34 +233,15 @@
    "label": "Other Activity"
   },
   {
-   "fieldname": "other_activity_type",
-   "fieldtype": "Data",
-   "label": "Type"
-  },
-  {
-   "fieldname": "other_activity_count",
-   "fieldtype": "Int",
-   "label": "No."
-  },
-  {
-   "fieldname": "other_activity_column",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "other_activity_duration",
-   "fieldtype": "Float",
-   "precision": "1",
-   "label": "Duration (min)"
-  },
-  {
-   "fieldname": "other_activity_summary",
-   "fieldtype": "Small Text",
-   "label": "Summary/Transcript"
+   "fieldname": "other_activities",
+   "fieldtype": "Table",
+   "label": "Other Activity",
+   "options": "Sales KPI Other Activity"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-13 17:00:00.000000",
+ "modified": "2026-10-13 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "SplINH",
  "name": "Sales KPI Entry",

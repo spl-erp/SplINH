@@ -41,6 +41,7 @@ Sheet2 of that workbook is an unrelated Lead-quality-score proposal; it is not p
 | Layer | Component | Name / route |
 |---|---|---|
 | Data | DocType | **Sales KPI Entry** (module `SplINH`) |
+| Data | Child DocType | **Sales KPI Other Activity** (one row per "other activity"; added 13 Oct 2026) |
 | Data | Custom Field on Lead | `custom_lead_score_updated_on` (Datetime, hidden, read-only) |
 | Input | Web Form | **`sales-kpi-entry`** at `/sales-kpi-entry` (published, login required) |
 | Dashboard L1 | Workspace | **KPI Dashboard** (8 Number Cards, 3 Charts, 2 shortcuts) |
@@ -79,7 +80,9 @@ The constants behind the call and visit buckets live in one place (`LEAD_COLD_ST
 
 **Sales KPI Entry** is named `"{user}-{entry_date}"`, which also enforces **one entry per user per day** (a second insert fails with a duplicate-name error). `user` and `entry_date` are required and read-only. The ten system-generated fields are Frappe **Virtual Fields**: no database columns, recomputed fresh whenever a record is opened, never editable. Only the manual fields are stored:
 
-`office_meeting_duration`, `training_duration`, `customer_complaints_count`, `customer_complaints_duration`, `reporting_duration`, `google_meet_count`, `google_meet_duration`, `google_meet_notes`, `whatsapp_chat_count`, `whatsapp_chat_duration`, `whatsapp_chat_notes`, `other_activity_type`, `other_activity_count`, `other_activity_duration`, `other_activity_summary`.
+`office_meeting_duration`, `training_duration`, `customer_complaints_count`, `customer_complaints_duration`, `reporting_duration`, `google_meet_count`, `google_meet_duration`, `google_meet_notes`, `whatsapp_chat_count`, `whatsapp_chat_duration`, `whatsapp_chat_notes`.
+
+**Other Activity is a child table** (`other_activities` → **Sales KPI Other Activity**), so a salesperson can log several activities a day. Each row has `activity_type` (required), `activity_count`, `activity_duration` (minutes, 1 decimal) and `activity_summary`; all four are `in_list_view`, which is what makes them visible in the Web Form grid. Until 13 Oct 2026 this was a single set of four fields on the entry itself (`other_activity_type/_count/_duration/_summary`). A one-time patch, `splinh.patches.move_other_activity_to_child_table` (listed under `[post_model_sync]` in `patches.txt`), copies any data already entered into one child row per entry. Frappe leaves the old columns in the database; they are harmless and `bench trim-tables` would remove them. A fresh install (e.g. production) never has those columns, and the patch does nothing there. The detail page and the Insights "Manual Entries" query do not read Other Activity.
 
 **Permissions** (`track_changes` on):
 
@@ -91,7 +94,7 @@ The constants behind the call and visit buckets live in one place (`LEAD_COLD_ST
 
 The **detail page** and its API method (`splinh.custom.kpi_dashboard_detail.get_dashboard_data`) are restricted to **Sales Manager and System Manager** with an explicit `frappe.only_for` check, independent of how the page was reached.
 
-The **Web Form** shows system fields read-only and manual fields editable, laid out like ERPNext's own `issues` Web Form. `allow_multiple` and `allow_edit` are on, deleting is off.
+The **Web Form** shows system fields read-only and manual fields editable, laid out like ERPNext's own `issues` Web Form. `allow_multiple` and `allow_edit` are on, deleting is off. Other Activity appears as an editable grid; a Web Form grid shows only the child fields marked `in_list_view`, so every field of the child doctype must keep that flag.
 
 ---
 
@@ -108,6 +111,8 @@ The **Web Form** shows system fields read-only and manual fields editable, laid 
 | File | Role |
 |---|---|
 | `splinh/doctype/sales_kpi_entry/` | DocType JSON + controller with the virtual-field properties and the bucket constants |
+| `splinh/doctype/sales_kpi_other_activity/` | Child DocType for the Other Activity table |
+| `patches/move_other_activity_to_child_table.py` | One-time data move from the old single-row fields (see section 4) |
 | `splinh/web_form/sales_kpi_entry/` | Web Form |
 | `splinh/page/kpi_dashboard_detail/` | Desk Page JSON + JS |
 | `custom/kpi_dashboard_cards.py` | Method-backed Number Card functions |
@@ -151,7 +156,7 @@ Because these are Server Scripts, **Lead Qualification only works where Server S
 - **Sales funnel / cost-centre group** (Opportunity generated, Quoted, Sample request, New sample, New sales and value, Repeat/Secondary order number and value): blocked on cost-centre and assignment policy.
 - **Incoming Enquiry**, **Incoming Calls**, **Assigned Leads/Opportunities by someone**, **Response time** (logic to be provided by Gaurav sir).
 - **Call-duration buckets** (Not connected, 0–90 s, 90–300 s, 300+ s for Cold and Followup): shown in the sheet as "only display on dashboard"; not built.
-- **Google Meet and WhatsApp chat recording / transcript, AI-generated MOM for manual items:** only the manual fields exist.
+- **Google Meet and WhatsApp chat recording / transcript, AI-generated MOM for manual items:** only the manual fields exist. Other Activity rows are not yet summed or shown on the dashboard or in Insights.
 - **Retailer** visits: no records and no dropdown option; not handled.
 
 ---

@@ -19,7 +19,7 @@
  "list_columns": [],
  "login_required": 1,
  "max_attachment_size": 0,
- "modified": "2026-10-13 17:00:00.000000",
+ "modified": "2026-10-13 19:00:00.000000",
  "modified_by": "Administrator",
  "module": "SplINH",
  "name": "sales-kpi-entry",
@@ -208,31 +208,10 @@
    "label": "Other Activity"
   },
   {
-   "fieldname": "other_activity_type",
-   "fieldtype": "Data",
-   "label": "Type",
-   "read_only": 0
-  },
-  {
-   "fieldname": "other_activity_count",
-   "fieldtype": "Int",
-   "label": "No.",
-   "read_only": 0
-  },
-  {
-   "fieldname": "other_activity_column",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "other_activity_duration",
-   "fieldtype": "Float",
-   "label": "Duration (min)",
-   "read_only": 0
-  },
-  {
-   "fieldname": "other_activity_summary",
-   "fieldtype": "Small Text",
-   "label": "Summary/Transcript",
+   "fieldname": "other_activities",
+   "fieldtype": "Table",
+   "label": "Other Activity",
+   "options": "Sales KPI Other Activity",
    "read_only": 0
   }
  ]

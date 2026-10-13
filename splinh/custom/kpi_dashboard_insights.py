@@ -29,9 +29,10 @@ fields:
     VISIT_NEW_ID_TYPES).
   - "Manual Entries" - a thin, mutate-free pass-through of Sales KPI Entry's
     stored (non-virtual) fields, for management to browse the raw manual logs
-    (Office Meeting/Training/Complaints/Reporting/Google Meet/WhatsApp Chat/
-    Other Activity) ad hoc - no bucketing needed, these are already plain
-    stored numbers.
+    (Office Meeting/Training/Complaints/Reporting/Google Meet/WhatsApp Chat)
+    ad hoc - no bucketing needed, these are already plain stored numbers. Other
+    Activity is a child table ("Sales KPI Other Activity", one row per activity) and
+    is not part of this query.
 
 Idempotent by "create once, never touch again" - same reasoning as
 call_monitoring_insights.py: once "KPI Dashboard" exists as an Insights
@@ -271,7 +272,6 @@ def _build_kpi_workbook():
 				"reporting_duration",
 				"google_meet_count", "google_meet_duration",
 				"whatsapp_chat_count", "whatsapp_chat_duration",
-				"other_activity_type", "other_activity_count", "other_activity_duration",
 			],
 		},
 	]
