@@ -92,6 +92,7 @@ def execute():
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
 		_ensure_call_ai,
+		_ensure_lead_duplicate_check,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
 		ensure_call_monitoring_detailed_page,
@@ -2750,6 +2751,119 @@ def _ensure_call_ai():
 		"Client Script",
 		CALL_AI_SCRIPT,
 		{"dt": "Call Log", "view": "Form", "enabled": 1, "script": CALL_AI_JS},
+	)
+
+
+# ------------------------------------------------------ Lead list Duplicate Check
+
+# "Duplicate Check" button on the Lead list (2026-10-13): Organisation + Phone + Email
+# in a small dialog, checked by splinh.api.lead_duplicate_check.check (read-only:
+# duplicate_guard's probe + Phone Lookup). A match shows each existing record with a
+# link; no match offers "Create Lead", which opens the normal new-Lead form prefilled -
+# nothing is inserted from here, so every Lead hook/validation runs as it always has.
+#
+# sigzensfa's public/js/lead_list.js REPLACES frappe.listview_settings["Lead"] (its
+# onload adds the Sales Person filter), and List Client Scripts run after it
+# (frappe/desk/form/meta.py __custom_list_js). So this wraps that onload rather than
+# assigning its own - assigning would silently drop the Sales Person filter.
+LEAD_DUPLICATE_CHECK_SCRIPT = "Lead List Duplicate Check"
+LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits here are overwritten on migrate.
+// "Duplicate Check" on the Lead list. Wraps (never replaces) the existing onload -
+// sigzensfa's lead_list.js adds its Sales Person filter there.
+(() => {
+	const settings = (frappe.listview_settings["Lead"] = frappe.listview_settings["Lead"] || {});
+	if (settings.__splinh_duplicate_check) return;
+	settings.__splinh_duplicate_check = true;
+
+	const previous_onload = settings.onload;
+	settings.onload = function (listview) {
+		if (previous_onload) previous_onload.apply(this, arguments);
+		if (!frappe.model.can_create("Lead")) return;
+		listview.page.add_inner_button(__("Duplicate Check"), () => open_dialog());
+	};
+
+	const esc = (text) => frappe.utils.escape_html(text == null ? "" : String(text));
+
+	function open_dialog() {
+		let dialog;
+		const clear = () => dialog && dialog.fields_dict.result.$wrapper.empty();
+		dialog = new frappe.ui.Dialog({
+			title: __("Duplicate Check"),
+			fields: [
+				{fieldname: "organization", fieldtype: "Data", label: __("Organization Name"), reqd: 1, onchange: clear},
+				{
+					fieldname: "phone",
+					fieldtype: "Data",
+					label: __("Phone"),
+					reqd: 1,
+					onchange: clear,
+					description: __("One number. Add + and the country code for numbers outside India."),
+				},
+				{fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), reqd: 1, onchange: clear},
+				{fieldname: "country", fieldtype: "Link", options: "Country", label: __("Country"), default: "India", onchange: clear},
+				{fieldname: "result", fieldtype: "HTML"},
+			],
+			primary_action_label: __("Check"),
+			primary_action(values) {
+				frappe
+					.call({
+						method: "splinh.api.lead_duplicate_check.check",
+						args: values,
+						freeze: true,
+						freeze_message: __("Checking..."),
+					})
+					.then((r) => render(dialog, values, r.message || {}));
+			},
+		});
+		dialog.show();
+	}
+
+	function render(dialog, values, res) {
+		const $result = dialog.fields_dict.result.$wrapper;
+		let html = (res.warnings || []).map((w) => `<div class="alert alert-warning small mb-2">${esc(w)}</div>`).join("");
+
+		if (res.status === "duplicate") {
+			html += `<div class="text-danger mb-2"><b>${esc(__("Already exists - {0} matching record(s):", [res.matches.length]))}</b></div>`;
+			html += `<table class="table table-bordered table-sm small"><thead><tr>
+				<th>${esc(__("Matched on"))}</th><th>${esc(__("Record"))}</th><th>${esc(__("Status"))}</th><th>${esc(__("Owner"))}</th>
+			</tr></thead><tbody>`;
+			for (const m of res.matches) {
+				const link = frappe.utils.get_form_link(m.doctype, m.name);
+				const via = (m.via || []).length ? `<div class="text-muted">${esc(m.via.join(", "))}</div>` : "";
+				html += `<tr>
+					<td>${esc((m.matched_on || []).map((t) => __(t)).join(", "))}</td>
+					<td><a href="${link}" target="_blank" rel="noopener">${esc(__(m.doctype))}: ${esc(m.title)}</a>
+						<span class="text-muted">(${esc(m.name)})</span>${via}</td>
+					<td>${esc(m.record_status ? __(m.record_status) : "")}</td>
+					<td>${esc(m.record_owner)}</td>
+				</tr>`;
+			}
+			html += "</tbody></table>";
+		} else {
+			html += `<div class="text-success mb-2"><b>${esc(__("No existing Lead, Customer or Contact found."))}</b></div>
+				<button class="btn btn-primary btn-sm splinh-create-lead">${esc(__("Create Lead"))}</button>`;
+		}
+
+		$result.html(html);
+		$result.find(".splinh-create-lead").on("click", () => {
+			dialog.hide();
+			frappe.new_doc("Lead", {
+				company_name: values.organization,
+				mobile_no: values.phone,
+				email_id: values.email,
+				country: values.country,
+			});
+		});
+	}
+})();
+"""
+
+
+def _ensure_lead_duplicate_check():
+	_upsert(
+		"Client Script",
+		LEAD_DUPLICATE_CHECK_SCRIPT,
+		{"dt": "Lead", "view": "List", "enabled": 1, "script": LEAD_DUPLICATE_CHECK_JS},
 	)
 
 
