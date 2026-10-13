@@ -93,6 +93,7 @@ def execute():
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
 		_ensure_call_ai,
+		_ensure_user_inh_fields,
 		_ensure_lead_duplicate_check,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
@@ -2815,6 +2816,67 @@ def _ensure_call_ai():
 		CALL_AI_SCRIPT,
 		{"dt": "Call Log", "view": "Form", "enabled": 1, "script": CALL_AI_JS},
 	)
+
+
+# ------------------------------------------------------- User: Splashjet INH tab
+
+# Latest check-in ("heartbeat") of the Call Tracker app, written by
+# api/app_status.py with a plain frappe.db.set_value (no User save hooks, no Version
+# rows). All read-only; the tab sits right after the SigzenSFA Mobile App tab.
+# A phone that stops checking in is the signal: filter the User list on Last Seen.
+USER_INH_DOCTYPE = "User"
+
+
+def _inh(fieldname, label, fieldtype, insert_after, **extra):
+	return {
+		"fieldname": fieldname,
+		"label": label,
+		"fieldtype": fieldtype,
+		"insert_after": insert_after,
+		**extra,
+	}
+
+
+def _inh_data(fieldname, label, fieldtype, insert_after, **extra):
+	return _inh(fieldname, label, fieldtype, insert_after, read_only=1, no_copy=1, **extra)
+
+
+USER_INH_FIELDS = [
+	_inh("custom_inh_tab", "Splashjet INH", "Tab Break", "custom_sfa_roles"),
+	_inh(
+		"custom_inh_section",
+		"Call Tracker app - latest check-in",
+		"Section Break",
+		"custom_inh_tab",
+		description="Filled by the Call Tracker app heartbeat. Read-only; only the latest values are kept.",
+	),
+	_inh_data("custom_inh_last_seen", "Last Seen", "Datetime", "custom_inh_section", in_standard_filter=1),
+	_inh_data("custom_inh_last_ip", "Last IP", "Data", "custom_inh_last_seen"),
+	_inh_data("custom_inh_device_id", "Device ID", "Data", "custom_inh_last_ip"),
+	_inh_data("custom_inh_device_model", "Device Model", "Data", "custom_inh_device_id"),
+	_inh_data("custom_inh_android_version", "Android Version", "Data", "custom_inh_device_model"),
+	_inh_data("custom_inh_app_version", "App Version", "Data", "custom_inh_android_version"),
+	_inh("custom_inh_col", None, "Column Break", "custom_inh_app_version"),
+	_inh_data("custom_inh_last_sync", "Last Call Sync (from phone)", "Datetime", "custom_inh_col"),
+	_inh_data("custom_inh_perm_call_log", "Call Log Permission", "Check", "custom_inh_last_sync"),
+	_inh_data("custom_inh_perm_audio", "Audio Permission", "Check", "custom_inh_perm_call_log"),
+	_inh_data("custom_inh_perm_notifications", "Notification Permission", "Check", "custom_inh_perm_audio"),
+	_inh_data("custom_inh_battery_exempt", "Battery Optimisation Exempt", "Check", "custom_inh_perm_notifications"),
+	_inh("custom_inh_rec_section", "Recording queue", "Section Break", "custom_inh_battery_exempt"),
+	_inh_data("custom_inh_rec_pending", "Recordings Waiting", "Int", "custom_inh_rec_section"),
+	_inh_data("custom_inh_rec_failed", "Recordings Failed", "Int", "custom_inh_rec_pending"),
+	_inh_data("custom_inh_rec_last_error", "Last Recording Error", "Small Text", "custom_inh_rec_failed"),
+]
+
+
+def _ensure_user_inh_fields():
+	for df in USER_INH_FIELDS:
+		name = f"{USER_INH_DOCTYPE}-{df['fieldname']}"
+		if frappe.db.exists("Custom Field", name):
+			continue
+		frappe.get_doc(
+			{"doctype": "Custom Field", "dt": USER_INH_DOCTYPE, "is_system_generated": 0, **df}
+		).insert(ignore_permissions=True)
 
 
 # ------------------------------------------------------ Lead list Duplicate Check
