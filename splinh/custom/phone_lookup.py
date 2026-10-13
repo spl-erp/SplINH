@@ -102,6 +102,30 @@ def find_party_by_phone(number):
 	return None
 
 
+def find_all_by_key(phone_key, limit=20):
+	"""Every Lead/Contact holding an already-normalised `phone_key`, in the same
+	priority order as find_party_by_phone - [{"doctype", "name", "field"}, ...].
+	For the Lead list's Duplicate Check (api/lead_duplicate_check.py), which shows
+	all holders of a number, not just the one a call would be linked to. Rows whose
+	source record no longer exists are skipped, as above."""
+	if not phone_key:
+		return []
+	rows = frappe.db.sql(
+		f"""
+		SELECT source_doctype, source_name, source_field FROM {TABLE}
+		WHERE phone_key = %s
+		ORDER BY source_rank, field_rank, source_creation DESC
+		LIMIT {int(limit)}
+		""",
+		(phone_key,),
+	)
+	return [
+		{"doctype": source_doctype, "name": source_name, "field": source_field}
+		for source_doctype, source_name, source_field in rows
+		if frappe.db.exists(source_doctype, source_name)
+	]
+
+
 # ------------------------------------------------------------- entry building
 
 
