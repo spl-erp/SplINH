@@ -443,6 +443,91 @@ def backfill_call_employee_command(context, dry_run=False):
 		frappe.destroy()
 
 
+@click.command("map-leads-to-customers")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True), help="The ID / Org_Code .xlsx file.")
+@click.option("--report", "report_path", default=None, help="CSV to write (default: next to the file).")
+@pass_context
+def map_leads_to_customers_command(context, file_path, report_path=None):
+	"""Classify every row of the ID / Org_Code file and write a CSV report.
+	Read-only: never writes to the database. Review the CSV, then run
+	`apply-lead-customer-map`."""
+	import os
+
+	from splinh.custom.lead_customer_map import build_report, write_report
+
+	report_path = report_path or os.path.splitext(file_path)[0] + "_report.csv"
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		report, counts = build_report(file_path, log=click.echo)
+		pending = write_report(report_path, report)
+		click.echo("\nREAD-ONLY - nothing written to the database")
+		for cls, count in sorted(counts.items(), key=lambda x: -x[1]):
+			click.echo(f"  {cls:18} {count}")
+		click.echo(f"\nreport:  {report_path}")
+		click.echo(f"pending (not applied by default, to resolve later): {pending} rows")
+	finally:
+		frappe.destroy()
+
+
+@click.command("apply-lead-customer-map")
+@click.option("--report", "report_path", required=True, type=click.Path(exists=True), help="CSV from map-leads-to-customers.")
+@click.option("--classes", default="CONFIRMED,ID_ONLY_NAME_OK", show_default=True, help="Comma-separated report classes to apply.")
+@click.option("--limit", default=0, help="Apply at most this many (use a small number first).")
+@click.option("--log", "log_path", default=None, help="Change log for revert (default: <report>_applied.csv).")
+@click.option("--yes", is_flag=True, default=False, help="Actually write. Without it, only counts what would be applied.")
+@click.option("--keep-modified", is_flag=True, default=False, help="Do NOT update the records' modified time (default: update it, so changes are traceable).")
+@pass_context
+def apply_lead_customer_map_command(context, report_path, classes, limit, log_path, yes, keep_modified):
+	"""Set Customer.lead_name and Lead status Converted for the approved report rows.
+	Re-checks every row against live data; idempotent; writes a change log for revert."""
+	import os
+
+	from splinh.custom.lead_customer_map import apply_report
+
+	log_path = log_path or os.path.splitext(report_path)[0] + "_applied.csv"
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		stats = apply_report(
+			report_path, log_path, classes=tuple(c.strip() for c in classes.split(",") if c.strip()), limit=limit, fix=yes, log=click.echo,
+			touch_modified=not keep_modified,
+		)
+		click.echo("\n" + ("Applied" if yes else "DRY RUN - nothing written (add --yes to apply)"))
+		click.echo(
+			f"  selected {stats['selected']} | {'applied' if yes else 'would apply'} {stats['applied']} | "
+			f"already done {stats.get('already_done', 0)} | skipped {stats['skipped']} | failed {stats['failed']}"
+		)
+		for line in stats["skipped_detail"][:20]:
+			click.echo(f"  skipped: {line}")
+		if yes:
+			click.echo(f"  change log: {log_path}")
+			click.echo(f"  pending sheet (skips/failures appended): {stats['pending_path']}")
+	finally:
+		frappe.destroy()
+
+
+@click.command("revert-lead-customer-map")
+@click.option("--log", "log_path", required=True, type=click.Path(exists=True), help="The *_applied.csv change log.")
+@click.option("--yes", is_flag=True, default=False, help="Actually write. Without it, only counts.")
+@click.option("--keep-modified", is_flag=True, default=False, help="Do NOT update the records' modified time.")
+@pass_context
+def revert_lead_customer_map_command(context, log_path, yes, keep_modified):
+	"""Undo apply-lead-customer-map from its change log (only rows the Customer still points at)."""
+	from splinh.custom.lead_customer_map import revert_log
+
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		stats = revert_log(log_path, fix=yes, log=click.echo, touch_modified=not keep_modified)
+		click.echo("\n" + ("Reverted" if yes else "DRY RUN - nothing written (add --yes to revert)"))
+		click.echo(f"  selected {stats['selected']} | {'reverted' if yes else 'would revert'} {stats['reverted']} | skipped {stats['skipped']}")
+		for line in stats["skipped_detail"][:20]:
+			click.echo(f"  skipped: {line}")
+	finally:
+		frappe.destroy()
+
+
 commands = [
 	export_doctype,
 	list_doctypes,
@@ -450,5 +535,8 @@ commands = [
 	verify_live_code_command,
 	rebuild_phone_lookup_command,
 	backfill_call_employee_command,
+	map_leads_to_customers_command,
+	apply_lead_customer_map_command,
+	revert_lead_customer_map_command,
 	ai_process_call_command,
 ]
