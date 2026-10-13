@@ -1,0 +1,319 @@
+{
+ "actions": [],
+ "creation": "2026-10-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "entry_date",
+  "system_section",
+  "lead_generation_count",
+  "lead_score",
+  "lead_qualification_count",
+  "lead_qualification_score",
+  "system_column_1",
+  "cold_call_count",
+  "followup_call_count",
+  "whatsapp_call_count",
+  "system_column_2",
+  "visit_existing_count",
+  "visit_new_count",
+  "meeting_duration_minutes",
+  "manual_section",
+  "office_meeting_duration",
+  "training_duration",
+  "customer_complaints_count",
+  "customer_complaints_duration",
+  "manual_column_1",
+  "reporting_duration",
+  "google_meet_count",
+  "google_meet_duration",
+  "google_meet_notes",
+  "manual_column_2",
+  "whatsapp_chat_count",
+  "whatsapp_chat_duration",
+  "whatsapp_chat_notes",
+  "other_activity_section",
+  "other_activity_type",
+  "other_activity_count",
+  "other_activity_column",
+  "other_activity_duration",
+  "other_activity_summary"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "User",
+   "default": "__user",
+   "reqd": 1,
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "entry_date",
+   "fieldtype": "Date",
+   "label": "Date",
+   "default": "Today",
+   "reqd": 1,
+   "read_only": 1,
+   "in_standard_filter": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "system_section",
+   "fieldtype": "Section Break",
+   "label": "Today's Activity (System-Generated)"
+  },
+  {
+   "fieldname": "lead_generation_count",
+   "fieldtype": "Int",
+   "label": "Lead Generation",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Leads created by you today."
+  },
+  {
+   "fieldname": "lead_score",
+   "fieldtype": "Float",
+   "precision": "2",
+   "label": "Lead Score (of today's leads)",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Average of export-profile % and domestic-profile % across today's leads."
+  },
+  {
+   "fieldname": "lead_qualification_count",
+   "fieldtype": "Int",
+   "label": "Lead Qualification",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Leads you updated today whose Lead Score actually changed as a result."
+  },
+  {
+   "fieldname": "lead_qualification_score",
+   "fieldtype": "Float",
+   "precision": "2",
+   "label": "Lead Qualification Score",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Average Lead Score across today's qualified leads."
+  },
+  {
+   "fieldname": "system_column_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "cold_call_count",
+   "fieldtype": "Int",
+   "label": "Cold Call",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Outgoing calls today to a Lead still at Lead/Open/Replied/Interested stage."
+  },
+  {
+   "fieldname": "followup_call_count",
+   "fieldtype": "Int",
+   "label": "Followup Call",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "All other outgoing calls today (direct Customer calls, or Leads at Opportunity stage or beyond)."
+  },
+  {
+   "fieldname": "whatsapp_call_count",
+   "fieldtype": "Int",
+   "label": "WhatsApp Calling",
+   "is_virtual": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "system_column_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "visit_existing_count",
+   "fieldtype": "Int",
+   "label": "Visit Existing",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Field visits today tagged to a Customer (or Opportunity)."
+  },
+  {
+   "fieldname": "visit_new_count",
+   "fieldtype": "Int",
+   "label": "Visit New",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Field visits today tagged to a Lead."
+  },
+  {
+   "fieldname": "meeting_duration_minutes",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Meeting Duration (min)",
+   "is_virtual": 1,
+   "read_only": 1,
+   "description": "Total minutes across today's completed field visits."
+  },
+  {
+   "fieldname": "manual_section",
+   "fieldtype": "Section Break",
+   "label": "Manual Entry"
+  },
+  {
+   "fieldname": "office_meeting_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Office Meeting (min)"
+  },
+  {
+   "fieldname": "training_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Training (min)"
+  },
+  {
+   "fieldname": "customer_complaints_count",
+   "fieldtype": "Int",
+   "label": "Customer Complaints (No.)"
+  },
+  {
+   "fieldname": "customer_complaints_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Customer Complaints (min)"
+  },
+  {
+   "fieldname": "manual_column_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reporting_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Taking/Giving Report (min)"
+  },
+  {
+   "fieldname": "google_meet_count",
+   "fieldtype": "Int",
+   "label": "Google Meet (No.)"
+  },
+  {
+   "fieldname": "google_meet_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Google Meet (min)"
+  },
+  {
+   "fieldname": "google_meet_notes",
+   "fieldtype": "Small Text",
+   "label": "Google Meet - Summary/Notes"
+  },
+  {
+   "fieldname": "manual_column_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "whatsapp_chat_count",
+   "fieldtype": "Int",
+   "label": "WhatsApp Chat (No.)"
+  },
+  {
+   "fieldname": "whatsapp_chat_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "WhatsApp Chat (min)"
+  },
+  {
+   "fieldname": "whatsapp_chat_notes",
+   "fieldtype": "Small Text",
+   "label": "WhatsApp Chat - Summary/Notes"
+  },
+  {
+   "fieldname": "other_activity_section",
+   "fieldtype": "Section Break",
+   "label": "Other Activity"
+  },
+  {
+   "fieldname": "other_activity_type",
+   "fieldtype": "Data",
+   "label": "Type"
+  },
+  {
+   "fieldname": "other_activity_count",
+   "fieldtype": "Int",
+   "label": "No."
+  },
+  {
+   "fieldname": "other_activity_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "other_activity_duration",
+   "fieldtype": "Float",
+   "precision": "1",
+   "label": "Duration (min)"
+  },
+  {
+   "fieldname": "other_activity_summary",
+   "fieldtype": "Small Text",
+   "label": "Summary/Transcript"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-13 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "Sales KPI Entry",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "allow_rename": 0,
+ "track_changes": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1,
+   "if_owner": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "SFA Sales User",
+   "share": 1,
+   "write": 1,
+   "if_owner": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager"
+  }
+ ],
+ "description": "One entry per salesperson per day - system-generated activity (Lead/Call Log/Visit data, read-only) alongside manual entries (meetings, training, complaints, Google Meet, WhatsApp Chat). Feeds the KPI Dashboard."
+}

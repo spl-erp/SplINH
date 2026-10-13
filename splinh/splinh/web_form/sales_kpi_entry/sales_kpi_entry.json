@@ -1,0 +1,239 @@
+{
+ "allow_comments": 0,
+ "allow_delete": 0,
+ "allow_edit": 1,
+ "allow_incomplete": 0,
+ "allow_multiple": 1,
+ "allow_print": 0,
+ "anonymous": 0,
+ "apply_document_permissions": 1,
+ "breadcrumbs": "[{\"label\":_(\"Sales KPI Entry\"), \"route\":\"sales-kpi-entry\"}]",
+ "condition_json": "[]",
+ "creation": "2026-10-01 00:00:00.000000",
+ "doc_type": "Sales KPI Entry",
+ "docstatus": 0,
+ "doctype": "Web Form",
+ "idx": 0,
+ "introduction_text": "One entry per day. The \"Today's Activity\" section is read-only and generated automatically from your Leads, Call Log and Visits - only the Manual Entry section needs to be filled in.",
+ "is_standard": 1,
+ "list_columns": [],
+ "login_required": 1,
+ "max_attachment_size": 0,
+ "modified": "2026-10-13 17:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "sales-kpi-entry",
+ "owner": "Administrator",
+ "published": 1,
+ "route": "sales-kpi-entry",
+ "show_attachments": 0,
+ "show_list": 1,
+ "show_sidebar": 1,
+ "success_message": "",
+ "success_url": "",
+ "title": "Sales KPI Entry",
+ "web_form_fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "User",
+   "options": "User",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "entry_date",
+   "fieldtype": "Date",
+   "hidden": 0,
+   "label": "Date",
+   "read_only": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "system_section",
+   "fieldtype": "Section Break",
+   "label": "Today's Activity (System-Generated)"
+  },
+  {
+   "fieldname": "lead_generation_count",
+   "fieldtype": "Int",
+   "label": "Lead Generation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "lead_score",
+   "fieldtype": "Float",
+   "label": "Lead Score (of today's leads)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "lead_qualification_count",
+   "fieldtype": "Int",
+   "label": "Lead Qualification",
+   "read_only": 1
+  },
+  {
+   "fieldname": "lead_qualification_score",
+   "fieldtype": "Float",
+   "label": "Lead Qualification Score",
+   "read_only": 1
+  },
+  {
+   "fieldname": "system_column_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "cold_call_count",
+   "fieldtype": "Int",
+   "label": "Cold Call",
+   "read_only": 1
+  },
+  {
+   "fieldname": "followup_call_count",
+   "fieldtype": "Int",
+   "label": "Followup Call",
+   "read_only": 1
+  },
+  {
+   "fieldname": "whatsapp_call_count",
+   "fieldtype": "Int",
+   "label": "WhatsApp Calling",
+   "read_only": 1
+  },
+  {
+   "fieldname": "system_column_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "visit_existing_count",
+   "fieldtype": "Int",
+   "label": "Visit Existing",
+   "read_only": 1
+  },
+  {
+   "fieldname": "visit_new_count",
+   "fieldtype": "Int",
+   "label": "Visit New",
+   "read_only": 1
+  },
+  {
+   "fieldname": "meeting_duration_minutes",
+   "fieldtype": "Float",
+   "label": "Meeting Duration (min)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "manual_section",
+   "fieldtype": "Section Break",
+   "label": "Manual Entry"
+  },
+  {
+   "fieldname": "office_meeting_duration",
+   "fieldtype": "Float",
+   "label": "Office Meeting (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "training_duration",
+   "fieldtype": "Float",
+   "label": "Training (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "customer_complaints_count",
+   "fieldtype": "Int",
+   "label": "Customer Complaints (No.)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "customer_complaints_duration",
+   "fieldtype": "Float",
+   "label": "Customer Complaints (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "manual_column_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reporting_duration",
+   "fieldtype": "Float",
+   "label": "Taking/Giving Report (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "google_meet_count",
+   "fieldtype": "Int",
+   "label": "Google Meet (No.)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "google_meet_duration",
+   "fieldtype": "Float",
+   "label": "Google Meet (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "google_meet_notes",
+   "fieldtype": "Small Text",
+   "label": "Google Meet - Summary/Notes",
+   "read_only": 0
+  },
+  {
+   "fieldname": "manual_column_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "whatsapp_chat_count",
+   "fieldtype": "Int",
+   "label": "WhatsApp Chat (No.)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "whatsapp_chat_duration",
+   "fieldtype": "Float",
+   "label": "WhatsApp Chat (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "whatsapp_chat_notes",
+   "fieldtype": "Small Text",
+   "label": "WhatsApp Chat - Summary/Notes",
+   "read_only": 0
+  },
+  {
+   "fieldname": "other_activity_section",
+   "fieldtype": "Section Break",
+   "label": "Other Activity"
+  },
+  {
+   "fieldname": "other_activity_type",
+   "fieldtype": "Data",
+   "label": "Type",
+   "read_only": 0
+  },
+  {
+   "fieldname": "other_activity_count",
+   "fieldtype": "Int",
+   "label": "No.",
+   "read_only": 0
+  },
+  {
+   "fieldname": "other_activity_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "other_activity_duration",
+   "fieldtype": "Float",
+   "label": "Duration (min)",
+   "read_only": 0
+  },
+  {
+   "fieldname": "other_activity_summary",
+   "fieldtype": "Small Text",
+   "label": "Summary/Transcript",
+   "read_only": 0
+  }
+ ]
+}

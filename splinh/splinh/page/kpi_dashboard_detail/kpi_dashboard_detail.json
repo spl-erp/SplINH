@@ -1,0 +1,23 @@
+{
+ "content": null,
+ "docstatus": 0,
+ "doctype": "Page",
+ "idx": 0,
+ "module": "SplINH",
+ "name": "kpi-dashboard-detail",
+ "owner": "Administrator",
+ "page_name": "kpi-dashboard-detail",
+ "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "Sales Manager"
+  }
+ ],
+ "script": null,
+ "standard": "Yes",
+ "style": null,
+ "system_page": 0,
+ "title": "KPI Dashboard - Detailed"
+}

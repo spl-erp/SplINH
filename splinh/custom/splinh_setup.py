@@ -22,6 +22,7 @@ import frappe
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 
 from splinh.custom.call_monitoring_insights import ensure_call_monitoring_insights
+from splinh.custom.kpi_dashboard_insights import ensure_kpi_dashboard_insights
 
 # Plain fields on the Lead itself. 90 points here + 10 for the Contact's
 # designation (below) = 100. Mirrored in the Client Script - keep both in step.
@@ -97,6 +98,8 @@ def execute():
 		ensure_call_monitoring_insights,
 		ensure_call_monitoring_detailed_page,
 		ensure_user_change_notifications,
+		ensure_kpi_dashboard,
+		ensure_kpi_dashboard_insights,
 	):
 		try:
 			step()
@@ -169,6 +172,28 @@ def ensure_customer_code_field_schema():
 # ------------------------------------------------------------- Lead score
 
 
+def _ensure_lead_score_updated_on_field():
+	"""Stamped by the two profile-score backfills/Before-Save scripts below, only when
+	the combined score (average of custom_export_profile_percent + custom_profile_percent -
+	see sales_kpi_entry.py's lead_score property) actually changes. Feeds the Lead
+	Qualification KPI - never set by hand, hidden from the form.
+	"""
+	if not frappe.db.exists("Custom Field", "Lead-custom_lead_score_updated_on"):
+		frappe.get_doc(
+			{
+				"doctype": "Custom Field",
+				"dt": "Lead",
+				"fieldname": "custom_lead_score_updated_on",
+				"label": "Lead Score Updated On",
+				"fieldtype": "Datetime",
+				"insert_after": "custom_profile_percent",
+				"read_only": 1,
+				"hidden": 1,
+				"is_system_generated": 0,
+			}
+		).insert(ignore_permissions=True)
+
+
 def ensure_lead_export_profile():
 	"""Score a Lead's data completeness - but only for NEW leads.
 
@@ -178,6 +203,7 @@ def ensure_lead_export_profile():
 	"""
 	if not frappe.db.exists("Custom Field", "Lead-custom_export_profile_percent"):
 		return
+	_ensure_lead_score_updated_on_field()
 
 	points_literal = json.dumps(LEAD_SCORE_POINTS, indent=4)
 	server_script = f'''# Managed by splinh.custom.splinh_setup - edits here are overwritten on migrate.
@@ -301,10 +327,17 @@ for name in candidates:
     # Write only on a real change, and without touching `modified` - otherwise every
     # run would bump 500 leads up the "recently modified" list and re-select them.
     if lead.custom_export_profile_percent != percent or lead.custom_export_profile_percent_range != percent_range:
-        frappe.db.set_value("Lead", name, {{
+        update_values = {{
             "custom_export_profile_percent": percent,
             "custom_export_profile_percent_range": percent_range,
-        }}, update_modified=False)
+        }}
+        # Lead Qualification KPI: the combined score (average of this field and
+        # custom_profile_percent) only moves when the export half itself changes -
+        # stamp only then, not on a percent_range-only non-change (range is a pure
+        # function of percent, so that can't happen on its own).
+        if lead.custom_export_profile_percent != percent:
+            update_values["custom_lead_score_updated_on"] = frappe.utils.now_datetime()
+        frappe.db.set_value("Lead", name, update_values, update_modified=False)
         updated += 1
 '''
 
@@ -419,6 +452,7 @@ def ensure_lead_profile_percent():
 	"""
 	if not frappe.db.exists("Custom Field", "Lead-custom_profile_percent"):
 		return
+	_ensure_lead_score_updated_on_field()
 
 	points_literal = json.dumps(LEAD_PROFILE_POINTS, indent=4)
 	server_script = f'''# Managed by splinh.custom.splinh_setup - edits here are overwritten on migrate.
@@ -450,6 +484,21 @@ if doc.name and frappe.db.exists("Lead", doc.name):
             percent += {LEAD_PROFILE_CONTACT_NAME_POINTS}
 
 doc.custom_profile_percent = percent
+
+# Lead Qualification KPI: this script runs on every save, new or existing, unlike
+# the export-score script's insert-only guard - so this is the one real place that
+# sees an EDIT of an existing Lead. get_doc_before_save() is None at creation, which
+# naturally excludes "being created" from counting as "being qualified" (that's Lead
+# Generation's job - see sales_kpi_entry.py). Only a genuine change on an existing
+# Lead stamps the combined-score timestamp.
+before = doc.get_doc_before_save()
+if before:
+    # custom_profile_percent is a Data (text) field, not numeric - get_doc_before_save()
+    # returns it as a plain string, so it must be cast before comparing against the
+    # freshly-computed int `percent`, or this would compare unequal on every save.
+    old_percent = frappe.utils.cint(before.get("custom_profile_percent"))
+    if old_percent != percent:
+        doc.custom_lead_score_updated_on = frappe.utils.now_datetime()
 '''
 
 	_upsert_server_script(
@@ -1751,20 +1800,34 @@ def _unblock_modules(users, modules):
 	row with `frappe.db.delete` leaves `get_blocked_modules()` returning the stale
 	list from cache, so the change appears to do nothing.
 	"""
+	# Deliberately NOT user_doc.save(): confirmed live (2026-10-01) that
+	# User.on_update() unconditionally calls share_with_self() (frappe/core/
+	# doctype/user/user.py), which creates/updates a DocShare on every single
+	# save - and splashjetsfa's own "validate" hook on DocShare
+	# (events/docshare.py -> utils/assignment.py) currently crashes with
+	# "ImportError: cannot import name '_add' from frappe.desk.form.assign_to"
+	# (that private name was renamed to public `add` in this Frappe version;
+	# splashjetsfa was never updated to match). This is a real, pre-existing,
+	# bench-wide bug - confirmed it breaks saving ANY User record at all right
+	# now, not something this change introduced - flagged separately, not
+	# fixed here (splashjetsfa is vendor code). Going around it with a raw
+	# delete + explicit cache invalidation reaches the identical end state
+	# (row gone, cached doc refreshed) without ever entering the User
+	# document's save/validate lifecycle.
 	for user in users:
 		if not frappe.db.exists("User", user):
 			continue
-		user_doc = frappe.get_doc("User", user)
-		keep = [row for row in user_doc.block_modules if row.module not in modules]
-		if len(keep) == len(user_doc.block_modules):
+		existing = frappe.get_all(
+			"Block Module", filters={"parent": user, "module": ["in", modules]}, pluck="module"
+		)
+		if not existing:
 			continue
-		removed = sorted({row.module for row in user_doc.block_modules} & set(modules))
-		user_doc.block_modules = keep
-		user_doc.save(ignore_permissions=True)
+		frappe.db.delete("Block Module", {"parent": user, "module": ["in", modules]})
+		frappe.clear_document_cache("User", user)
 		frappe.clear_cache(user=user)
 		frappe.log_error(
 			title="splinh_setup: unblocked modules for user",
-			message=f"Removed {removed} from Block Modules for {user} so the "
+			message=f"Removed {sorted(existing)} from Block Modules for {user} so the "
 			f"corresponding workspace is reachable in the sidebar.",
 		)
 
@@ -3420,3 +3483,440 @@ def ensure_user_change_notifications():
 			"recipients": [{"receiver_by_role": "Administrator"}],
 		},
 	)
+
+
+# --------------------------------------------------------------- KPI Dashboard
+
+# Layer 1 of the KPI Capturing project (2026-10-01): Workspace Number Cards/
+# Charts for the Sales KPI Entry doctype's system-generated metrics, following
+# the exact same 3-layer pattern already proven on Call Monitoring (Workspace ->
+# Insights workbook -> custom drill-down Page). See
+# apps/splinh/splinh/custom/kpi_dashboard_cards.py for why Cold Call,
+# Followup Call, Visit Existing and Visit New need a "Custom" Number Card
+# (method-backed) rather than a plain filter - they are the same derived,
+# no-real-column metrics as the doctype's own virtual fields, not a new
+# definition invented here.
+
+KPI_DASHBOARD_WORKSPACE = "KPI Dashboard"
+KPI_DASHBOARD_MODULE = "SplINH"
+KPI_DASHBOARD_SIDEBAR = "CRM"  # same reasoning as CALL_MONITORING_SIDEBAR: the
+# SplINH module itself has no sidebar; CRM already lists Lead/Opportunity.
+KPI_COLD_FOLLOWUP_REPORT = "KPI Cold vs Followup Breakdown"
+KPI_VISIT_REPORT = "KPI Visit Existing vs New Breakdown"
+
+
+KPI_DASHBOARD_DETAILED_PAGE = "kpi-dashboard-detail"  # exactly 20 chars - see
+# ensure_call_monitoring_detailed_page()'s docstring for why this must not exceed
+# that: Page.autoname() unconditionally truncates page_name to 20 characters.
+
+
+def ensure_kpi_dashboard():
+	"""Number Cards, Charts and a Workspace for the Sales KPI Entry metrics."""
+	_ensure_kpi_dashboard_cards()
+	_ensure_kpi_dashboard_reports()
+	_ensure_kpi_dashboard_charts()
+	_ensure_kpi_dashboard_workspace()
+	_ensure_kpi_dashboard_sidebar_entry()
+	_ensure_kpi_dashboard_detailed_page()
+	# A Workspace is filtered out of the sidebar by a user's own "Block Modules"
+	# list BEFORE any role/permission check even runs (frappe/desk/desktop.py
+	# get_workspace_sidebar_items() -> get_blocked_modules()) - confirmed the
+	# hard way on this bench already (Work Status/Projects, see
+	# _unblock_modules()'s own docstring). When this feature was first built (in
+	# the module then called "Splashjet", 2026-10-01) every real Sales User/SFA
+	# Sales User on that bench had that module in the list (confirmed live: both
+	# test accounts checked had it blocked, 57-59 other modules each), so the
+	# "KPI Dashboard" Workspace was invisible to the exact people it is for,
+	# regardless of doctype permissions being correct. It now lives in this app's
+	# module ("SplINH"), so that is the module to clear. A no-op for anyone who
+	# does not have it blocked. The Web Form itself has no such gate (it's a
+	# website route, not a Workspace), but the Workspace is the only place a
+	# shortcut to it lives.
+	_unblock_modules(_get_sales_kpi_team(), ["SplINH"])
+
+
+def _get_sales_kpi_team():
+	"""Everyone who holds one of the three roles this feature is built for:
+	Sales User / SFA Sales User (fill the Web Form - the same two roles Sales
+	KPI Entry's own permission table grants create/write to) and Sales Manager
+	(views the Workspace/dashboard read-only). No separate team registry
+	exists for this feature the way Work Status has one (Project Users) - this
+	role-based list is the equivalent source of truth, and naturally grows/
+	shrinks as roles are assigned without anyone editing this file.
+	"""
+	return frappe.get_all(
+		"Has Role",
+		filters={"role": ["in", ["Sales User", "SFA Sales User", "Sales Manager"]], "parenttype": "User"},
+		pluck="parent",
+		distinct=True,
+	)
+
+
+def _ensure_kpi_dashboard_detailed_page():
+	"""Recreate the DB `Page` record for the filterable drill-down view
+	(kpi_dashboard_detail.json/.js) - same pattern as
+	ensure_call_monitoring_detailed_page(): the .json/.js under the app survive
+	a restore, the `Page` doctype row does not. Real access control is NOT this
+	record's `roles` - that only gates Desk navigation/direct URL reachability.
+	The actual gate is `splinh.custom.kpi_dashboard_detail.get_dashboard_data`'s
+	own `frappe.only_for` check, which runs on every call regardless of how the
+	page was reached.
+	"""
+	values = {
+		"page_name": KPI_DASHBOARD_DETAILED_PAGE,
+		"title": "KPI Dashboard - Detailed",
+		"module": KPI_DASHBOARD_MODULE,
+		"standard": "Yes",
+		"system_page": 0,
+	}
+	page_exists = frappe.db.exists("Page", KPI_DASHBOARD_DETAILED_PAGE)
+	if page_exists:
+		page = frappe.get_doc("Page", KPI_DASHBOARD_DETAILED_PAGE)
+		page.update(values)
+		page.flags.ignore_permissions = True
+		page.flags.ignore_mandatory = True
+		page.save()
+	else:
+		page = frappe.get_doc({"doctype": "Page", "name": KPI_DASHBOARD_DETAILED_PAGE, **values})
+		page.flags.ignore_validate = True
+		page.flags.ignore_permissions = True
+		page.flags.ignore_mandatory = True
+		page.insert()
+	existing_roles = {row.role for row in page.roles}
+	changed = False
+	for role in ("System Manager", "Sales Manager"):
+		if role not in existing_roles:
+			page.append("roles", {"role": role})
+			changed = True
+	if changed:
+		page.save(ignore_permissions=True)
+
+	_ensure_kpi_dashboard_detailed_sidebar_entry()
+
+
+def _ensure_kpi_dashboard_detailed_sidebar_entry():
+	"""One shortcut, in the CRM sidebar - same placement reasoning as
+	_ensure_kpi_dashboard_sidebar_entry(), just for the drill-down Page instead
+	of the Workspace."""
+	if not frappe.db.exists("Workspace Sidebar", KPI_DASHBOARD_SIDEBAR):
+		return
+	sidebar = frappe.get_doc("Workspace Sidebar", KPI_DASHBOARD_SIDEBAR)
+	existing = next(
+		(item for item in sidebar.items if item.link_to == KPI_DASHBOARD_DETAILED_PAGE and item.link_type == "Page"),
+		None,
+	)
+	if existing:
+		return
+	sidebar.append(
+		"items",
+		{
+			"label": "KPI Dashboard - Detailed",
+			"type": "Link",
+			"link_type": "Page",
+			"link_to": KPI_DASHBOARD_DETAILED_PAGE,
+			"icon": "dashboard",
+		},
+	)
+	for index, row in enumerate(sidebar.items, start=1):
+		row.idx = index
+	sidebar.save(ignore_permissions=True)
+
+
+def _kpi_week_filter(doctype, fieldname):
+	"""[doctype, fieldname, ">=", <Monday 00:00 of the current week>] - same
+	static-bound-recomputed-every-migrate reasoning as
+	_call_monitoring_week_filter(), just parameterised over doctype/fieldname
+	since KPI cards span three different source tables (Lead, Call Log,
+	Start-End Meeting), each keyed on a different date field.
+	"""
+	week_start = frappe.utils.get_first_day_of_week(frappe.utils.nowdate(), as_str=True)
+	return [doctype, fieldname, ">=", week_start]
+
+
+def _ensure_kpi_dashboard_cards():
+	def _fix_currency(card):
+		# Same gotcha as _ensure_call_monitoring_cards(): `currency` auto-populates
+		# for a numeric aggregation and silently renders a plain count/sum as money.
+		if card.currency:
+			frappe.db.set_value("Number Card", card.name, "currency", None, update_modified=False)
+
+	native_cards = [
+		("Lead Generation", "Lead", "creation", []),
+		("Lead Qualification", "Lead", "custom_lead_score_updated_on", []),
+		("WhatsApp Calling", "Call Log", "start_time", [["Call Log", "custom_source", "=", "WhatsApp"]]),
+	]
+	for suffix, doctype, date_field, extra_conditions in native_cards:
+		label = f"KPI - {suffix}"
+		card = _upsert(
+			"Number Card",
+			label,
+			{
+				"label": label,
+				"type": "Document Type",
+				"document_type": doctype,
+				"function": "Count",
+				"filters_json": json.dumps([_kpi_week_filter(doctype, date_field), *extra_conditions]),
+				"is_public": 1,
+				"show_percentage_stats": 0,
+				"module": KPI_DASHBOARD_MODULE,
+			},
+		)
+		_fix_currency(card)
+
+	custom_cards = [
+		("Cold Call", "Call Log", "start_time", "splinh.custom.kpi_dashboard_cards.get_cold_call_count"),
+		("Followup Call", "Call Log", "start_time", "splinh.custom.kpi_dashboard_cards.get_followup_call_count"),
+		("Visit Existing", "Start-End Meeting", "start_meeting", "splinh.custom.kpi_dashboard_cards.get_visit_existing_count"),
+		("Visit New", "Start-End Meeting", "start_meeting", "splinh.custom.kpi_dashboard_cards.get_visit_new_count"),
+		("Meeting Duration (min)", "Start-End Meeting", "start_meeting", "splinh.custom.kpi_dashboard_cards.get_meeting_duration_minutes"),
+	]
+	for suffix, doctype, date_field, method in custom_cards:
+		label = f"KPI - {suffix}"
+		card = _upsert(
+			"Number Card",
+			label,
+			{
+				"label": label,
+				"type": "Custom",
+				"document_type": doctype,
+				"method": method,
+				"filters_json": json.dumps([_kpi_week_filter(doctype, date_field)]),
+				"is_public": 1,
+				"show_percentage_stats": 0,
+				"module": KPI_DASHBOARD_MODULE,
+			},
+		)
+		_fix_currency(card)
+
+
+def _ensure_kpi_dashboard_reports():
+	"""Backs the Cold vs Followup and Visit Existing vs New donut charts with
+	CASE-bucketed Query Reports - same reasoning as
+	_ensure_call_monitoring_status_report(): a native "Group By" Dashboard Chart
+	needs `group_by_based_on` to be a real registered fieldname, not a CASE
+	expression or a cross-table join, so a bucketed/joined breakdown needs a
+	Query Report's own SQL instead.
+
+	The CASE values below are not a new definition - they mirror
+	LEAD_COLD_STATUSES / VISIT_EXISTING_ID_TYPES / VISIT_NEW_ID_TYPES in
+	splinh.splinh.doctype.sales_kpi_entry.sales_kpi_entry exactly (a SQL
+	report can't import a Python tuple, so this is restated here deliberately,
+	the same way CALL_MONITORING_STATUS_REPORT restates its own CASE rather than
+	sharing code with the Python-side status bucketing).
+	"""
+	cold_followup_query = """SELECT
+	CASE WHEN l.status IN ('Lead', 'Open', 'Replied', 'Interested') THEN 'Cold Call'
+		ELSE 'Followup Call' END AS call_bucket,
+	COUNT(*) AS count
+FROM `tabCall Log` cl
+LEFT JOIN `tabLead` l ON l.name = cl.custom_lead
+WHERE cl.type = 'Outgoing'
+GROUP BY call_bucket
+ORDER BY count DESC"""
+
+	visit_query = """SELECT
+	CASE WHEN id_type IN ('Customer', 'Opportunity') THEN 'Visit Existing'
+		WHEN id_type = 'Lead' THEN 'Visit New'
+		ELSE 'Other' END AS visit_bucket,
+	COUNT(*) AS count
+FROM `tabStart-End Meeting`
+GROUP BY visit_bucket
+ORDER BY count DESC"""
+
+	for report_name, query, columns in (
+		(
+			KPI_COLD_FOLLOWUP_REPORT,
+			cold_followup_query,
+			[("call_bucket", "Call Type", "Data", 150), ("count", "Calls", "Int", 100)],
+		),
+		(
+			KPI_VISIT_REPORT,
+			visit_query,
+			[("visit_bucket", "Visit Type", "Data", 150), ("count", "Visits", "Int", 100)],
+		),
+	):
+		report_exists = frappe.db.exists("Report", report_name)
+		if report_exists:
+			report = frappe.get_doc("Report", report_name)
+		else:
+			report = frappe.new_doc("Report")
+			report.report_name = report_name
+		report.ref_doctype = "Call Log" if report_name == KPI_COLD_FOLLOWUP_REPORT else "Start-End Meeting"
+		report.report_type = "Query Report"
+		report.module = KPI_DASHBOARD_MODULE
+		report.query = query
+		report.is_standard = "No"  # Administrator without developer_mode can't save "Yes" anyway.
+		report.columns = []
+		for fieldname, label, fieldtype, width in columns:
+			report.append("columns", {"fieldname": fieldname, "label": label, "fieldtype": fieldtype, "width": width})
+		existing_roles = {row.role for row in report.roles}
+		for role in ("System Manager", "Sales Manager"):
+			if role not in existing_roles:
+				report.append("roles", {"role": role})
+		report.flags.ignore_permissions = True
+		if report_exists:
+			report.save()
+		else:
+			report.insert()
+
+
+def _ensure_kpi_dashboard_charts():
+	chart_names = []
+
+	label = "KPI - Cold vs Followup Call"
+	chart = _upsert(
+		"Dashboard Chart",
+		label,
+		{
+			"chart_name": label,
+			"chart_type": "Report",
+			"report_name": KPI_COLD_FOLLOWUP_REPORT,
+			"document_type": "Call Log",
+			"use_report_chart": 0,
+			"x_field": "call_bucket",
+			"type": "Donut",
+			"filters_json": "[]",
+			"is_public": 1,
+			"module": KPI_DASHBOARD_MODULE,
+		},
+	)
+	chart.y_axis = []
+	chart.append("y_axis", {"y_field": "count", "color": "#eb6834"})
+	chart.save(ignore_permissions=True)
+	if chart.currency:
+		frappe.db.set_value("Dashboard Chart", chart.name, "currency", None, update_modified=False)
+	chart_names.append(label)
+
+	label = "KPI - Visit Existing vs New"
+	chart = _upsert(
+		"Dashboard Chart",
+		label,
+		{
+			"chart_name": label,
+			"chart_type": "Report",
+			"report_name": KPI_VISIT_REPORT,
+			"document_type": "Start-End Meeting",
+			"use_report_chart": 0,
+			"x_field": "visit_bucket",
+			"type": "Donut",
+			"filters_json": "[]",
+			"is_public": 1,
+			"module": KPI_DASHBOARD_MODULE,
+		},
+	)
+	chart.y_axis = []
+	chart.append("y_axis", {"y_field": "count", "color": "#1baf7a"})
+	chart.save(ignore_permissions=True)
+	if chart.currency:
+		frappe.db.set_value("Dashboard Chart", chart.name, "currency", None, update_modified=False)
+	chart_names.append(label)
+
+	label = "KPI - Lead Generation per day"
+	chart = _upsert(
+		"Dashboard Chart",
+		label,
+		{
+			"chart_name": label,
+			"chart_type": "Count",
+			"document_type": "Lead",
+			"based_on": "creation",
+			"timespan": "Last Month",
+			"time_interval": "Daily",
+			"type": "Line",
+			"filters_json": "[]",
+			"is_public": 1,
+			"module": KPI_DASHBOARD_MODULE,
+		},
+	)
+	if chart.currency:
+		frappe.db.set_value("Dashboard Chart", chart.name, "currency", None, update_modified=False)
+	chart_names.append(label)
+
+	return chart_names
+
+
+def _ensure_kpi_dashboard_workspace():
+	card_names = [
+		"KPI - Lead Generation", "KPI - Lead Qualification",
+		"KPI - Cold Call", "KPI - Followup Call", "KPI - WhatsApp Calling",
+		"KPI - Visit Existing", "KPI - Visit New", "KPI - Meeting Duration (min)",
+	]
+	chart_names = ["KPI - Cold vs Followup Call", "KPI - Visit Existing vs New", "KPI - Lead Generation per day"]
+
+	workspace = _upsert(
+		"Workspace",
+		KPI_DASHBOARD_WORKSPACE,
+		{
+			"label": KPI_DASHBOARD_WORKSPACE,
+			"title": KPI_DASHBOARD_WORKSPACE,
+			"type": "Workspace",
+			"public": 1,
+			"module": KPI_DASHBOARD_MODULE,
+			"icon": "dashboard",
+		},
+	)
+	workspace.number_cards = []
+	workspace.charts = []
+	workspace.shortcuts = []
+	workspace.append(
+		"shortcuts",
+		{
+			"type": "DocType", "link_to": "Sales KPI Entry", "label": "All Entries",
+			"doc_view": "List", "color": "Blue",
+		},
+	)
+	workspace.append(
+		"shortcuts",
+		{"type": "URL", "url": "/sales-kpi-entry", "label": "Fill Today's Entry (Web Form)", "color": "Green"},
+	)
+	# The block's reference is matched against the child row's *label*, not the
+	# card/chart docname - see the identical gotcha on _ensure_call_monitoring_workspace().
+	for name in card_names:
+		workspace.append("number_cards", {"number_card_name": name, "label": name})
+	for name in chart_names:
+		workspace.append("charts", {"chart_name": name, "label": name})
+
+	content = [
+		{"id": "kpihdr1", "type": "header", "data": {"text": '<span class="h4"><b>KPI Dashboard</b></span>', "col": 12}},
+		{"id": "kpisc1", "type": "shortcut", "data": {"shortcut_name": "All Entries", "col": 6}},
+		{"id": "kpisc2", "type": "shortcut", "data": {"shortcut_name": "Fill Today's Entry (Web Form)", "col": 6}},
+		{"id": "kpihdr2", "type": "header", "data": {"text": '<span class="h4"><b>This Week</b></span>', "col": 12}},
+	]
+	for i, name in enumerate(card_names, start=1):
+		content.append({"id": f"kpinc{i}", "type": "number_card", "data": {"number_card_name": name, "col": 4}})
+	content.append(
+		{"id": "kpihdr3", "type": "header", "data": {"text": '<span class="h4"><b>Breakdown</b></span>', "col": 12}}
+	)
+	for i, name in enumerate(chart_names, start=1):
+		content.append({"id": f"kpich{i}", "type": "chart", "data": {"chart_name": name, "col": 6}})
+	workspace.content = json.dumps(content)
+	workspace.save(ignore_permissions=True)
+
+
+def _ensure_kpi_dashboard_sidebar_entry():
+	"""One shortcut, in the CRM sidebar - same placement reasoning as
+	_ensure_call_monitoring_detailed_sidebar_entry(), just appended rather than
+	inserted at position 1 (that slot is already taken by Call Monitoring).
+	"""
+	if not frappe.db.exists("Workspace Sidebar", KPI_DASHBOARD_SIDEBAR):
+		return
+	sidebar = frappe.get_doc("Workspace Sidebar", KPI_DASHBOARD_SIDEBAR)
+	existing = next(
+		(item for item in sidebar.items if item.link_to == KPI_DASHBOARD_WORKSPACE and item.link_type == "Workspace"),
+		None,
+	)
+	if existing:
+		return
+	sidebar.append(
+		"items",
+		{
+			"label": KPI_DASHBOARD_WORKSPACE,
+			"type": "Link",
+			"link_type": "Workspace",
+			"link_to": KPI_DASHBOARD_WORKSPACE,
+			"icon": "dashboard",
+		},
+	)
+	for index, row in enumerate(sidebar.items, start=1):
+		row.idx = index
+	sidebar.save(ignore_permissions=True)
