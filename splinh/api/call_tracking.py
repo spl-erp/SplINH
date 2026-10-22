@@ -52,11 +52,22 @@ import traceback
 from urllib.parse import unquote
 
 import frappe
-from frappe.utils import cint, get_bench_path, get_datetime
+from frappe.utils import add_to_date, cint, get_bench_path, get_datetime, now_datetime
 from frappe.utils.file_manager import save_file
 
 from splinh.custom.call_employee import employee_for_user
 from splinh.custom.call_log_phone_matching import ensure_dynamic_link
+from splinh.custom.call_review import (
+	SOURCE_APP,
+	clean_review,
+	decide,
+	flag,
+	not_connected_value,
+	option_items,
+	parse_day,
+	parse_options,
+	review_item,
+)
 from splinh.custom.phone_lookup import find_party_by_phone
 
 CALL_LOG_INSERT_MAX_ATTEMPTS = 3
@@ -713,6 +724,134 @@ def receive_call_recording(call_log_name):
 	# A manager runs it on demand from the "Transcribe & Summarize" button on the Call
 	# Log (api/call_ai.py). The response shape is unchanged for the mobile app.
 	return {"status": "queued", "call_log_name": call_log_name}
+
+
+_REVIEW_COLUMNS = (
+	"name",
+	"custom_call_drop_stage",
+	"custom_next_stage",
+	"custom_call_category",
+	"custom_detailed_action",
+	"custom_reviewed_at",
+	"custom_reviewed_by",
+	"custom_review_source",
+)
+
+
+@frappe.whitelist(methods=["GET"])
+def get_call_review_options():
+	"""The picklists the app shows in the review form, read live from the Call Log Select
+	fields (exact spelling and order), so changing a list in the ERP never needs an app release.
+	`not_connected_value` is what the app sends by itself for a missed call; null if that value
+	is not one of the drop stages (the app then skips automatic reviews)."""
+	meta = frappe.get_meta("Call Log")
+	drop_options = meta.get_field("custom_call_drop_stage").options
+	category_field = meta.get_field("custom_call_category")
+	return {
+		"call_drop_stages": option_items(drop_options),
+		"next_stages": option_items(meta.get_field("custom_next_stage").options),
+		"call_categories": option_items(category_field.options) if category_field else [],
+		"not_connected_value": not_connected_value(drop_options),
+		"server_time": now_datetime().isoformat(timespec="seconds"),
+	}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_my_call_reviews(date=None):
+	"""The calling user's reviewed calls that STARTED on `date` (YYYY-MM-DD, default today).
+
+	Only calls with a real review: custom_reviewed_at is set. The ~1,480 old rows that were
+	pre-filled with "Not Connected" by the dropdown default have no reviewed_at and are
+	excluded. A review saved later (or in the ERP the next day) still belongs to its call's day.
+	Only the caller's own Call Logs (owner = session user). Capped at 500 rows.
+	"""
+	day = parse_day(date, now_datetime().date())
+	start = get_datetime(str(day))
+	end = add_to_date(start, days=1)
+	rows = frappe.db.sql(
+		f"""
+		SELECT {", ".join(f"`{c}`" for c in _REVIEW_COLUMNS)}
+		FROM `tabCall Log`
+		WHERE owner = %s AND start_time >= %s AND start_time < %s
+		  AND custom_reviewed_at IS NOT NULL
+		ORDER BY start_time
+		LIMIT 500
+		""",
+		(frappe.session.user, start, end),
+		as_dict=True,
+	)
+	return {
+		"reviews": [review_item(row) for row in rows],
+		"server_time": now_datetime().isoformat(timespec="seconds"),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_call_review(
+	call_log_name,
+	call_drop_stage=None,
+	next_stage=None,
+	next_stage_action=None,
+	reviewed_at=None,
+	device_id=None,
+	call_category=None,
+	force=None,
+	auto=None,
+):
+	"""The rep's review of one call, sent by the Call Tracker app (same token as push_calls).
+
+	Idempotent upsert by Call Log name: a repeat or an edit overwrites the stored values
+	(last write wins). Answers the way the app expects: 404 while the Call Log does not
+	exist yet (the app retries), 403 for someone else's call, 422 for a value that is not
+	allowed (not retried; a plain ValidationError would be 417 = retried for days).
+
+	Nothing is lost silently:
+	  - `auto` (the automatic "Not Connected" for a missed call) never replaces a real review:
+	    when one exists the answer is 200 {"status": "skipped"} and nothing is written.
+	  - A review made in the ERP form (review_source "erp") is not overwritten unless the app
+	    sends `force`: HTTP 409 with the current review (same shape as a get_my_call_reviews
+	    item, plus "status": "conflict").
+	  - Every write sets reviewed_by (the calling user) and review_source "app".
+
+	Written with frappe.db.set_value and no Call Log save: Call Log has track_changes, a
+	validate hook and the permlevel on the review fields would silently drop a rep's
+	write through a normal save. The caller's right to write is the explicit owner check.
+	The allowed values are read from the live Select options, so changing the picklist in
+	the ERP needs no code change.
+	"""
+	meta = frappe.get_meta("Call Log")
+	category_field = meta.get_field("custom_call_category")
+	values = clean_review(
+		{
+			"call_drop_stage": call_drop_stage,
+			"next_stage": next_stage,
+			"next_stage_action": next_stage_action,
+			"reviewed_at": reviewed_at,
+			"call_category": call_category,
+		},
+		parse_options(meta.get_field("custom_call_drop_stage").options),
+		parse_options(meta.get_field("custom_next_stage").options),
+		now_datetime(),
+		allowed_category=parse_options(category_field.options) if category_field else None,
+	)
+
+	current = frappe.db.get_value("Call Log", call_log_name, ["owner", *_REVIEW_COLUMNS], as_dict=True)
+	if not current:
+		frappe.throw(f"Call Log {call_log_name} not found", frappe.DoesNotExistError)
+	if current.owner != frappe.session.user:
+		raise frappe.PermissionError
+
+	action = decide(current.custom_reviewed_at, current.custom_review_source, flag(auto), flag(force))
+	if action == "skip":
+		return {"status": "skipped"}
+	if action == "conflict":
+		frappe.local.response["http_status_code"] = 409
+		return {"status": "conflict", **review_item(current)}
+
+	values["custom_reviewed_by"] = frappe.session.user
+	values["custom_review_source"] = SOURCE_APP
+	frappe.db.set_value("Call Log", call_log_name, values, update_modified=False)
+	return {"status": "updated" if current.custom_reviewed_at else "ok"}
 
 
 def _ensure_absolute_site_path():

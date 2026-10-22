@@ -1,8 +1,9 @@
 """The "Duplicate Check" button on the Lead list (2026-10-13).
 
-One whitelisted, read-only method. The salesperson types Organisation, Phone and
-Email (all three required) before filling a whole Lead form; this answers "does it
-already exist?" from two sources and merges them:
+One whitelisted, read-only method. The salesperson types Organisation, Phone and/or
+Email (any one is enough; empty ones are simply not checked, like the guard's own
+blank-field rule) before filling a whole Lead form; this answers "does it already
+exist?" from two sources and merges them:
 
   1. duplicate_guard's own probe (duplicate_guard.api.check_duplicates) - the same
      index and matching rules the guard enforces on save (organisation = company /
@@ -38,27 +39,31 @@ DEFAULT_COUNTRY = "India"
 
 
 @frappe.whitelist(methods=["POST"])
-def check(organization, phone, email, country=None):
+def check(organization=None, phone=None, email=None, country=None):
 	frappe.has_permission("Lead", "create", throw=True)
 
 	organization = cstr(organization).strip()
 	phone = cstr(phone).strip()
 	email = cstr(email).strip()
 	country = cstr(country).strip() or None
-	if not (organization and phone and email):
-		frappe.throw(_("Organisation, Phone and Email are all required."))
-	if not validate_email_address(email):
+	if not (organization or phone or email):
+		frappe.throw(_("Enter at least one of Organisation, Phone or Email."))
+	if email and not validate_email_address(email):
 		frappe.throw(_("{0} is not a valid email address.").format(email))
-	phone_key = phone_key_for(phone, country)
-	if not phone_key:
-		frappe.throw(
-			_("Could not read {0} as one phone number. Enter a single number; add + and the country code for numbers outside {1}.").format(
-				phone, DEFAULT_COUNTRY
+	phone_key = None
+	if phone:
+		phone_key = phone_key_for(phone, country)
+		if not phone_key:
+			frappe.throw(
+				_("Could not read {0} as one phone number. Enter a single number; add + and the country code for numbers outside {1}.").format(
+					phone, DEFAULT_COUNTRY
+				)
 			)
-		)
 
 	warnings = []
-	hits = _guard_hits(organization, phone, email, country, warnings) + _phone_lookup_hits(phone_key, warnings)
+	hits = _guard_hits(organization, phone, email, country, warnings)
+	if phone_key:
+		hits += _phone_lookup_hits(phone_key, warnings)
 	matches = merge_hits(hits, _resolve)
 	if len(matches) > MAX_MATCHES:
 		warnings.append(_("Showing the first {0} of {1} matching records.").format(MAX_MATCHES, len(matches)))
@@ -66,12 +71,53 @@ def check(organization, phone, email, country=None):
 	for match in matches:
 		match.update(_describe(match["doctype"], match["name"]))
 
+	provided = provided_labels(organization, phone, email)
 	return {
 		"status": "duplicate" if matches else "clean",
 		"matches": matches,
-		"normalized": {"phone": phone_key, "email": email.lower(), "organization": organization},
+		"normalized": {
+			"phone": phone_key,
+			"email": email.lower() or None,
+			"organization": organization or None,
+		},
+		"checked": [_(label) for label in provided],
+		"not_checked": [_(label) for label in INPUT_LABELS if label not in provided],
 		"warnings": warnings,
 	}
+
+
+# --------------------------------------------------------------------- inputs
+# Which of the three boxes the user filled decides what is checked. Pure helpers so the
+# rule is testable without a site.
+
+INPUT_LABELS = ("Organisation", "Phone", "Email")
+_LABEL_TYPE = {"Organisation": "Name", "Phone": "Phone", "Email": "Email"}
+
+
+def provided_labels(organization, phone, email):
+	"""["Organisation", "Phone", "Email"] reduced to the ones that have a value."""
+	given = {"Organisation": organization, "Phone": phone, "Email": email}
+	return [label for label in INPUT_LABELS if cstr(given[label]).strip()]
+
+
+def provided_types(organization, phone, email):
+	"""The guard value types (Name / Phone / Email) the user actually gave."""
+	return [_LABEL_TYPE[label] for label in provided_labels(organization, phone, email)]
+
+
+def guard_values(organization, phone, email, country=None):
+	"""What to hand duplicate_guard's probe: only filled fields (the guard ignores blank
+	ones anyway, but an empty string must never look like a value)."""
+	values = {}
+	if cstr(organization).strip():
+		values["company_name"] = cstr(organization).strip()
+	if cstr(phone).strip():
+		values["mobile_no"] = cstr(phone).strip()
+	if cstr(email).strip():
+		values["email_id"] = cstr(email).strip()
+	if values and cstr(country).strip():
+		values["country"] = cstr(country).strip()
+	return values
 
 
 # ------------------------------------------------------------------ phone key
@@ -167,16 +213,19 @@ def _guard_hits(organization, phone, email, country, warnings):
 	from duplicate_guard.api import check_duplicates
 	from duplicate_guard.core.utils import get_check_types
 
-	off = [t for t in CHECK_TYPES if t not in get_check_types("Lead")]
+	# Only the types the user filled count; a Phone that the guard is not checking is not
+	# worth a warning - the Phone Lookup table covers phones either way.
+	enabled = get_check_types("Lead")
+	off = [t for t in provided_types(organization, phone, email) if t not in enabled and t != "Phone"]
 	if off:
 		warnings.append(
 			_("Duplicate Guard is not checking: {0}. Tick the matching boxes in Duplicate Guard Settings.").format(
 				", ".join(_(t) for t in off)
 			)
 		)
-	values = {"company_name": organization, "mobile_no": phone, "email_id": email}
-	if country:
-		values["country"] = country
+	values = guard_values(organization, phone, email, country)
+	if not values:
+		return []
 	try:
 		return hits_from_guard(check_duplicates("Lead", values))
 	except Exception:

@@ -101,5 +101,31 @@ class TestPhoneKeyForOtherCountries(unittest.TestCase):
 		self.assertIsNone(m.phone_key_for("515021333", "Nowhere", isd=""))
 
 
+class TestOptionalInputs(unittest.TestCase):
+	"""Any one of Organisation / Phone / Email is enough; blank ones are not checked."""
+
+	def test_provided_labels_skip_blanks(self):
+		self.assertEqual(m.provided_labels("Acme", "8103858929", ""), ["Organisation", "Phone"])
+		self.assertEqual(m.provided_labels("", "", "a@b.com"), ["Email"])
+		self.assertEqual(m.provided_labels("  ", None, None), [])
+		self.assertEqual(m.provided_labels("Acme", "81", "a@b.com"), ["Organisation", "Phone", "Email"])
+
+	def test_provided_types_map_to_guard_types(self):
+		self.assertEqual(m.provided_types("Acme", "8103858929", ""), ["Name", "Phone"])
+		self.assertEqual(m.provided_types("", "", "a@b.com"), ["Email"])
+
+	def test_guard_values_only_filled_fields(self):
+		self.assertEqual(
+			m.guard_values("Acme", "8103858929", "", "India"),
+			{"company_name": "Acme", "mobile_no": "8103858929", "country": "India"},
+		)
+		self.assertEqual(m.guard_values("", "", "a@b.com"), {"email_id": "a@b.com"})
+		self.assertEqual(m.guard_values(" Acme ", None, None), {"company_name": "Acme"})
+
+	def test_nothing_filled_means_nothing_to_probe(self):
+		self.assertEqual(m.guard_values("", "", "", "India"), {})
+		self.assertEqual(m.guard_values(None, None, None), {})
+
+
 if __name__ == "__main__":
 	unittest.main()

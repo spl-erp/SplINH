@@ -17,8 +17,13 @@ doc_events = {
 	},
 	# Manager-review fields - see custom/call_log_manager_review.py and
 	# _ensure_call_manager_review_fields() in custom/splinh_setup.py.
+	# stamp_erp_review: who/when/where a review was made when it is edited in the ERP form
+	# (custom/call_review.py), so the app never silently overwrites it.
 	"Call Log": {
-		"validate": "splinh.custom.call_log_manager_review.sync_manager_remarked_flag"
+		"validate": [
+			"splinh.custom.call_log_manager_review.sync_manager_remarked_flag",
+			"splinh.custom.call_review.stamp_erp_review",
+		]
 	},
 }
 

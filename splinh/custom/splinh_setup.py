@@ -22,6 +22,7 @@ import frappe
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 
 from splinh.custom.call_monitoring_insights import ensure_call_monitoring_insights
+from splinh.custom.call_review import DROP_STAGE_OPTIONS
 from splinh.custom.kpi_dashboard_insights import ensure_kpi_dashboard_insights
 
 # Plain fields on the Lead itself. 90 points here + 10 for the Contact's
@@ -92,6 +93,7 @@ def execute():
 		ensure_call_tracking,
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
+		_ensure_call_review_fields,
 		_ensure_call_ai,
 		_ensure_user_inh_fields,
 		_ensure_lead_duplicate_check,
@@ -2181,10 +2183,10 @@ CALL_MANAGER_REVIEW_FIELDS = [
 		"fieldname": "custom_call_drop_stage",
 		"label": "Call Drop Stage",
 		"fieldtype": "Select",
-		"options": (
-			"\nConnection\nIntroduction\nProfiling\nNeed Profiling\nProduct Selection\n"
-			"Product Intro\nObjection Handling\nRate\nNegotiation and Closing\nOther"
-		),
+		# 2026-10-15: the list is now the rep-facing Call Review list sent by the Call Tracker
+		# app (see call_review.py). The old manager stage list here would have been
+		# re-asserted on every migrate and silently replaced the live one.
+		"options": DROP_STAGE_OPTIONS,
 		"insert_after": "custom_training_need",
 		"permlevel": 1,
 	},
@@ -2230,11 +2232,8 @@ def _ensure_call_manager_review_fields():
 		)
 
 	_fix_custom_training_need_fieldtype()
-	_set_custom_field_props(
-		"Call Log",
-		"custom_call_drop_stage",
-		{"options": CALL_MANAGER_REVIEW_FIELDS[2]["options"]},
-	)
+	# The drop stage options are NOT re-asserted here: the list is owned by the ERP UI (it feeds the
+	# Call Tracker app through get_call_review_options), so a migrate must never reset it.
 
 	for role in (CALL_TRACKING_MANAGER_ROLE, "System Manager"):
 		if frappe.db.exists("Custom DocPerm", {"parent": "Call Log", "role": role, "permlevel": 1}):
@@ -2800,6 +2799,41 @@ frappe.ui.form.on("Call Log", {
 """
 
 
+def _ensure_call_review_fields():
+	"""Call Review fields the code owns: custom_reviewed_at, custom_reviewed_by and
+	custom_review_source (who and where the review was made: the app or the ERP form), plus an
+	index for the app's "my reviews of a day" query.
+
+	The review fields themselves (custom_call_drop_stage, custom_next_stage,
+	custom_call_category, custom_detailed_action) were made by hand and are never recreated
+	here, and their option lists are never touched: they belong to the ERP UI.
+	"""
+	extra = [
+		("custom_reviewed_at", "Reviewed At", "Datetime", "custom_detailed_action", {}),
+		("custom_reviewed_by", "Reviewed By", "Link", "custom_reviewed_at", {"options": "User"}),
+		("custom_review_source", "Review Source", "Select", "custom_reviewed_by", {"options": "\napp\nerp"}),
+	]
+	for fieldname, label, fieldtype, insert_after, more in extra:
+		if frappe.db.exists("Custom Field", f"Call Log-{fieldname}"):
+			continue
+		frappe.get_doc(
+			{
+				"doctype": "Custom Field",
+				"dt": "Call Log",
+				"fieldname": fieldname,
+				"label": label,
+				"fieldtype": fieldtype,
+				"insert_after": insert_after,
+				"read_only": 1,
+				"no_copy": 1,
+				"is_system_generated": 0,
+				**more,
+			}
+		).insert(ignore_permissions=True)
+	# get_my_call_reviews filters on owner + the day of start_time; the table had no index for it.
+	frappe.db.add_index("Call Log", ["owner", "start_time"])
+
+
 def _ensure_call_ai():
 	for df in CALL_AI_FIELDS:
 		name = f"Call Log-{df['fieldname']}"
@@ -2881,8 +2915,8 @@ def _ensure_user_inh_fields():
 
 # ------------------------------------------------------ Lead list Duplicate Check
 
-# "Duplicate Check" button on the Lead list (2026-10-13): Organisation + Phone + Email
-# in a small dialog, checked by splinh.api.lead_duplicate_check.check (read-only:
+# "Duplicate Check" button on the Lead list (2026-10-13): Organisation, Phone and/or Email
+# (any one is enough; empty ones are not checked) in a small dialog, checked by splinh.api.lead_duplicate_check.check (read-only:
 # duplicate_guard's probe + Phone Lookup). A match shows each existing record with a
 # link; no match offers "Create Lead", which opens the normal new-Lead form prefilled -
 # nothing is inserted from here, so every Lead hook/validation runs as it always has.
@@ -2915,21 +2949,33 @@ LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits he
 		dialog = new frappe.ui.Dialog({
 			title: __("Duplicate Check"),
 			fields: [
-				{fieldname: "organization", fieldtype: "Data", label: __("Organization Name"), reqd: 1, onchange: clear},
+				{
+					fieldname: "intro",
+					fieldtype: "HTML",
+					options: `<div class="text-muted small mb-2">${esc(__("Fill any of Organization, Phone or Email. Empty fields are not checked."))}</div>`,
+				},
+				{fieldname: "organization", fieldtype: "Data", label: __("Organization Name"), onchange: clear},
 				{
 					fieldname: "phone",
 					fieldtype: "Data",
 					label: __("Phone"),
-					reqd: 1,
 					onchange: clear,
 					description: __("One number. Add + and the country code for numbers outside India."),
 				},
-				{fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), reqd: 1, onchange: clear},
+				{fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), onchange: clear},
 				{fieldname: "country", fieldtype: "Link", options: "Country", label: __("Country"), default: "India", onchange: clear},
 				{fieldname: "result", fieldtype: "HTML"},
 			],
 			primary_action_label: __("Check"),
 			primary_action(values) {
+				if (!(values.organization || values.phone || values.email)) {
+					frappe.msgprint({
+						title: __("Duplicate Check"),
+						message: __("Enter at least one of Organization, Phone or Email."),
+						indicator: "orange",
+					});
+					return;
+				}
 				frappe
 					.call({
 						method: "splinh.api.lead_duplicate_check.check",
@@ -2947,7 +2993,16 @@ LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits he
 		const $result = dialog.fields_dict.result.$wrapper;
 		let html = (res.warnings || []).map((w) => `<div class="alert alert-warning small mb-2">${esc(w)}</div>`).join("");
 
+		const checked = (res.checked || []).join(", ");
+		const not_checked = (res.not_checked || []).join(", ");
+		const scope = checked
+			? `<div class="text-muted small mb-2">${esc(__("Checked: {0}", [checked]))}${
+					not_checked ? ` &middot; ${esc(__("Not checked (left empty): {0}", [not_checked]))}` : ""
+			  }</div>`
+			: "";
+
 		if (res.status === "duplicate") {
+			html += scope;
 			html += `<div class="text-danger mb-2"><b>${esc(__("Already exists - {0} matching record(s):", [res.matches.length]))}</b></div>`;
 			html += `<table class="table table-bordered table-sm small"><thead><tr>
 				<th>${esc(__("Matched on"))}</th><th>${esc(__("Record"))}</th><th>${esc(__("Status"))}</th><th>${esc(__("Owner"))}</th>
@@ -2965,6 +3020,7 @@ LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits he
 			}
 			html += "</tbody></table>";
 		} else {
+			html += scope;
 			html += `<div class="text-success mb-2"><b>${esc(__("No existing Lead, Customer or Contact found."))}</b></div>
 				<button class="btn btn-primary btn-sm splinh-create-lead">${esc(__("Create Lead"))}</button>`;
 		}
@@ -2972,12 +3028,12 @@ LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits he
 		$result.html(html);
 		$result.find(".splinh-create-lead").on("click", () => {
 			dialog.hide();
-			frappe.new_doc("Lead", {
-				company_name: values.organization,
-				mobile_no: values.phone,
-				email_id: values.email,
-				country: values.country,
-			});
+			const prefill = {};
+			if (values.organization) prefill.company_name = values.organization;
+			if (values.phone) prefill.mobile_no = values.phone;
+			if (values.email) prefill.email_id = values.email;
+			if (values.country) prefill.country = values.country;
+			frappe.new_doc("Lead", prefill);
 		});
 	}
 })();
