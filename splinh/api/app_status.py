@@ -25,6 +25,8 @@ import re
 import frappe
 from frappe.utils import get_datetime, now_datetime
 
+from splinh.custom.call_recording_pause import app_config, safe_app_config
+
 FIELD_PREFIX = "custom_inh_"
 
 # payload key -> maximum length (single-line text)
@@ -154,4 +156,19 @@ def heartbeat():
 		values[FIELD_PREFIX + "last_ip"] = ip
 
 	frappe.db.set_value("User", user, values, update_modified=False)
-	return {"ok": True, "server_time": now.isoformat(timespec="seconds")}
+	# The recording switch and recent pauses ride along (see get_my_app_config); extra keys only.
+	return {"ok": True, "server_time": now.isoformat(timespec="seconds"), **safe_app_config(user)}
+
+
+@frappe.whitelist(methods=["GET"])
+def get_my_app_config():
+	"""What the app needs to know about recording for the calling user.
+
+	{"record_calls": bool, "paused_periods": [{"from", "to" | null}], "server_time"}. OFF means
+	paused until it is turned ON again: the app must not upload the recording of a call that
+	started inside a paused period (even after the resume); recordings of calls made before a
+	pause may still finish uploading. The server also refuses such uploads."""
+	user = frappe.session.user
+	if not user or user == "Guest":
+		frappe.throw("Not permitted", frappe.PermissionError)
+	return app_config(user)

@@ -6,6 +6,9 @@ app_email = "support@splashjetink.com"
 app_license = "mit"
 
 doc_events = {
+	# Per-user "Record Calls" toggle: opens/closes a pause period only when that one field
+	# changes (custom/call_recording_pause.py).
+	"User": {"on_update": "splinh.custom.call_recording_pause.track_recording_toggle"},
 	# Phone Lookup (indexed number -> Lead/Contact table) - see custom/phone_lookup.py.
 	"Contact": {
 		"on_update": "splinh.custom.phone_lookup.sync_document",
@@ -20,6 +23,9 @@ doc_events = {
 	# stamp_erp_review: who/when/where a review was made when it is edited in the ERP form
 	# (custom/call_review.py), so the app never silently overwrites it.
 	"Call Log": {
+		# on_update: copy the remark to the Lead's Notes / the Customer's Comments when it (or the
+		# Lead/Customer link) is changed in the ERP form (custom/call_remark_sync.py).
+		"on_update": "splinh.custom.call_remark_sync.on_call_log_update",
 		"validate": [
 			"splinh.custom.call_log_manager_review.sync_manager_remarked_flag",
 			"splinh.custom.call_review.stamp_erp_review",
@@ -39,6 +45,15 @@ override_doctype_class = {
 override_doctype_dashboards = {
 	"Lead": "splinh.override.lead_dashboard.get_data",
 	"Customer": "splinh.override.customer_dashboard.get_data",
+}
+
+# Call Tracker device tokens (custom/call_tracker_auth.py). enforce_token_scope returns at once
+# unless the request carries `Frappe-Authorization-Source: Call Tracker Token`; for those it limits
+# the token to the Call Tracker endpoints. The daily job disables tokens unused for N days.
+auth_hooks = ["splinh.custom.call_tracker_auth.enforce_token_scope"]
+
+scheduler_events = {
+	"daily": ["splinh.custom.call_tracker_auth.expire_unused_tokens"],
 }
 
 # Re-apply local customisations that live as database records (Custom Fields,

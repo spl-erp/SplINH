@@ -1,0 +1,69 @@
+{
+ "actions": [],
+ "creation": "2026-10-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-22 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "owner": "Administrator",
+ "states": [],
+ "name": "Call Tracker Login Event",
+ "autoname": "hash",
+ "field_order": [
+  "user",
+  "event",
+  "device_id",
+  "ip",
+  "detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Data",
+   "label": "User",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "event",
+   "fieldtype": "Select",
+   "label": "Event",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "options": "\npassword_failed\nblocked\notp_requested\notp_ok\notp_failed\notp_expired\ntoken_issued\ntoken_reused\ntoken_revoked\nlogout"
+  },
+  {
+   "fieldname": "device_id",
+   "fieldtype": "Data",
+   "label": "Device ID",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "ip",
+   "fieldtype": "Data",
+   "label": "IP",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "detail",
+   "fieldtype": "Small Text",
+   "label": "Detail"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "in_create": 1
+}

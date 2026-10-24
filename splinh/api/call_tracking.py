@@ -57,6 +57,8 @@ from frappe.utils.file_manager import save_file
 
 from splinh.custom.call_employee import employee_for_user
 from splinh.custom.call_log_phone_matching import ensure_dynamic_link
+from splinh.custom.call_recording_pause import recording_paused_for
+from splinh.custom.call_remark_sync import sync_call_remark
 from splinh.custom.call_review import (
 	SOURCE_APP,
 	clean_review,
@@ -676,6 +678,13 @@ def receive_call_recording(call_log_name):
 		_log_recording_upload("REJECTED: no read permission", call_log_name)
 		raise frappe.PermissionError
 
+	# Recording paused for this rep when the call was made (User "Record Calls" toggle OFF):
+	# accept the request so the app clears the item, but store nothing, now or after a resume.
+	call = frappe.db.get_value("Call Log", call_log_name, ["owner", "start_time"], as_dict=True)
+	if call and recording_paused_for(call.owner, call.start_time):
+		_log_recording_upload("SKIPPED: recording paused for this user when the call was made", call_log_name)
+		return {"status": "skipped", "reason": "recording paused", "call_log_name": call_log_name}
+
 	uploaded = frappe.request.files.get("audio_file")
 	if not uploaded:
 		_log_recording_upload("REJECTED: no audio_file in the upload", call_log_name)
@@ -851,6 +860,8 @@ def submit_call_review(
 	values["custom_reviewed_by"] = frappe.session.user
 	values["custom_review_source"] = SOURCE_APP
 	frappe.db.set_value("Call Log", call_log_name, values, update_modified=False)
+	# The remark also goes to the Lead's Notes / the Customer's Comments (never fails the review).
+	sync_call_remark(call_log_name)
 	return {"status": "updated" if current.custom_reviewed_at else "ok"}
 
 

@@ -443,6 +443,34 @@ def backfill_call_employee_command(context, dry_run=False):
 		frappe.destroy()
 
 
+@click.command("backfill-call-remarks")
+@click.option("--dry-run", is_flag=True, default=False, help="List what would be written; write nothing.")
+@click.option("--limit", type=int, default=None, help="Only the first N calls (oldest review first), for a small trial.")
+@click.option("--report", "report_path", default="call_remarks_backfill.csv", help="CSV of every note/comment written or planned.")
+@pass_context
+def backfill_call_remarks_command(context, dry_run=False, limit=None, report_path="call_remarks_backfill.csv"):
+	"""Copy existing Call Log remarks to the Lead's Notes / the Customer's Comments (once).
+
+	Only calls with a remark, a Lead or Customer and no entry yet. Safe to re-run: calls already done
+	are skipped. Always run with --dry-run first and read the CSV."""
+	from splinh.custom.call_remark_sync import backfill
+
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		result = backfill(fix=not dry_run, limit=limit, log=click.echo)
+		with open(report_path, "w", newline="", encoding="utf-8") as handle:
+			writer = csv.DictWriter(handle, fieldnames=["call_log", "target_type", "target", "author", "remark"])
+			writer.writeheader()
+			writer.writerows(result["rows"])
+		click.echo("\n" + ("DRY RUN - nothing written" if dry_run else "Applied"))
+		click.echo(f"  Lead notes      {result['lead']}")
+		click.echo(f"  Customer comments {result['customer']}")
+		click.echo(f"  report: {report_path}")
+	finally:
+		frappe.destroy()
+
+
 @click.command("map-leads-to-customers")
 @click.option("--file", "file_path", required=True, type=click.Path(exists=True), help="The ID / Org_Code .xlsx file.")
 @click.option("--report", "report_path", default=None, help="CSV to write (default: next to the file).")
@@ -535,6 +563,7 @@ commands = [
 	verify_live_code_command,
 	rebuild_phone_lookup_command,
 	backfill_call_employee_command,
+	backfill_call_remarks_command,
 	map_leads_to_customers_command,
 	apply_lead_customer_map_command,
 	revert_lead_customer_map_command,

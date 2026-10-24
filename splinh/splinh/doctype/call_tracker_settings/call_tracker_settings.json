@@ -1,0 +1,102 @@
+{
+ "actions": [],
+ "creation": "2026-10-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-22 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "owner": "Administrator",
+ "states": [],
+ "name": "Call Tracker Settings",
+ "issingle": 1,
+ "field_order": [
+  "enabled",
+  "section_otp",
+  "otp_approver_emails",
+  "approver_role",
+  "otp_valid_minutes",
+  "max_otp_attempts",
+  "section_tokens",
+  "required_role",
+  "max_devices_per_user",
+  "token_inactivity_days"
+ ],
+ "fields": [
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enable remote sign-in",
+   "default": "0",
+   "description": "Master switch for the Call Tracker app sign-in (app_login_start / app_login_verify). Off: the endpoints answer 'not enabled' and nothing else changes."
+  },
+  {
+   "fieldname": "section_otp",
+   "fieldtype": "Section Break",
+   "label": "OTP approval (sign-in from outside the office)"
+  },
+  {
+   "fieldname": "otp_approver_emails",
+   "fieldtype": "Small Text",
+   "label": "Extra approver emails (optional)",
+   "description": "The Administrator account's own email ALWAYS receives the code (whatever it is, nothing to type). Add other addresses here only if you want more people to get it. Comma or one per line. The rep never receives the code."
+  },
+  {
+   "fieldname": "approver_role",
+   "fieldtype": "Link",
+   "options": "Role",
+   "label": "Approver role (optional)",
+   "description": "Enabled users with this role also receive the OTP, in addition to the Administrator. Leave empty for none."
+  },
+  {
+   "fieldname": "otp_valid_minutes",
+   "fieldtype": "Int",
+   "label": "OTP valid for (minutes)",
+   "default": "10"
+  },
+  {
+   "fieldname": "max_otp_attempts",
+   "fieldtype": "Int",
+   "label": "Wrong tries before a new code is needed",
+   "default": "5"
+  },
+  {
+   "fieldname": "section_tokens",
+   "fieldtype": "Section Break",
+   "label": "Who and how long"
+  },
+  {
+   "fieldname": "required_role",
+   "fieldtype": "Link",
+   "options": "Role",
+   "label": "Required role",
+   "default": "Call Tracker User",
+   "description": "The user must hold this role AND have the 'Call Tracker App User (INH)' tick box on the User form."
+  },
+  {
+   "fieldname": "max_devices_per_user",
+   "fieldtype": "Int",
+   "label": "Devices per user",
+   "default": "1",
+   "description": "Approving a new device when the user is at this limit disables the oldest device."
+  },
+  {
+   "fieldname": "token_inactivity_days",
+   "fieldtype": "Int",
+   "label": "Disable a token unused for (days)",
+   "default": "30"
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

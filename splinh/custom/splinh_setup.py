@@ -94,6 +94,7 @@ def execute():
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
 		_ensure_call_review_fields,
+		_ensure_call_remark_fields,
 		_ensure_call_ai,
 		_ensure_user_inh_fields,
 		_ensure_lead_duplicate_check,
@@ -2834,6 +2835,31 @@ def _ensure_call_review_fields():
 	frappe.db.add_index("Call Log", ["owner", "start_time"])
 
 
+def _ensure_call_remark_fields():
+	"""Two hidden Call Log fields that remember which Lead note / Customer comment holds this call's
+	remark ("<target>|<name>"), so editing the remark updates the same entry (custom/call_remark_sync.py)."""
+	for fieldname, label, after in (
+		("custom_lead_note_ref", "Lead Note Ref", "custom_detailed_action"),
+		("custom_customer_comment_ref", "Customer Comment Ref", "custom_lead_note_ref"),
+	):
+		if frappe.db.exists("Custom Field", f"Call Log-{fieldname}"):
+			continue
+		frappe.get_doc(
+			{
+				"doctype": "Custom Field",
+				"dt": "Call Log",
+				"fieldname": fieldname,
+				"label": label,
+				"fieldtype": "Data",
+				"insert_after": after,
+				"hidden": 1,
+				"read_only": 1,
+				"no_copy": 1,
+				"is_system_generated": 0,
+			}
+		).insert(ignore_permissions=True)
+
+
 def _ensure_call_ai():
 	for df in CALL_AI_FIELDS:
 		name = f"Call Log-{df['fieldname']}"
@@ -2877,11 +2903,34 @@ def _inh_data(fieldname, label, fieldtype, insert_after, **extra):
 
 USER_INH_FIELDS = [
 	_inh("custom_inh_tab", "Splashjet INH", "Tab Break", "custom_sfa_roles"),
+	# Editable. The gate for the Call Tracker app's own sign-in (custom/call_tracker_auth.py): the
+	# user needs the Call Tracker User role AND this tick box. Also the flag we ask Sigzen to
+	# honour in its hourly token sweep. Sits at the top of the tab, above the read-only check-in.
+	_inh(
+		"custom_inh_app_user",
+		"Call Tracker App User (INH)",
+		"Check",
+		"custom_inh_tab",
+		no_copy=1,
+		default="0",
+		description="Tick for the reps who may sign in to the Call Tracker app with its own token (also from outside the office, with an approved code).",
+	),
+	# Editable. OFF = recording PAUSED for this rep until it is ticked again (custom/call_recording_pause.py):
+	# recordings of calls made during the pause are never uploaded, not even after the resume.
+	_inh(
+		"custom_inh_record_calls",
+		"Record Calls (INH)",
+		"Check",
+		"custom_inh_app_user",
+		no_copy=1,
+		default="1",
+		description="Untick to PAUSE recording uploads for this rep until it is ticked again. Calls still sync; recordings of calls made during the pause are never uploaded.",
+	),
 	_inh(
 		"custom_inh_section",
 		"Call Tracker app - latest check-in",
 		"Section Break",
-		"custom_inh_tab",
+		"custom_inh_record_calls",
 		description="Filled by the Call Tracker app heartbeat. Read-only; only the latest values are kept.",
 	),
 	_inh_data("custom_inh_last_seen", "Last Seen", "Datetime", "custom_inh_section", in_standard_filter=1),

@@ -1,0 +1,160 @@
+{
+ "actions": [],
+ "creation": "2026-10-22 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-22 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "owner": "Administrator",
+ "states": [],
+ "name": "Call Tracker Token",
+ "autoname": "hash",
+ "field_order": [
+  "user",
+  "device_id",
+  "device_model",
+  "app_version",
+  "column_break_1",
+  "enabled",
+  "signed_in_via",
+  "last_used",
+  "last_ip",
+  "section_cred",
+  "api_key",
+  "api_secret",
+  "password_fingerprint",
+  "section_revoke",
+  "revoked_on",
+  "revoke_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "User",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "device_id",
+   "fieldtype": "Data",
+   "label": "Device ID",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "device_model",
+   "fieldtype": "Data",
+   "label": "Device Model",
+   "read_only": 1
+  },
+  {
+   "fieldname": "app_version",
+   "fieldtype": "Data",
+   "label": "App Version",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Untick to cut this phone off at once. The app then has to sign in again (and needs a new OTP outside the office)."
+  },
+  {
+   "fieldname": "signed_in_via",
+   "fieldtype": "Select",
+   "label": "Signed in via",
+   "options": "\noffice\notp",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_used",
+   "fieldtype": "Datetime",
+   "label": "Last Used",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "last_ip",
+   "fieldtype": "Data",
+   "label": "Last IP",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_cred",
+   "fieldtype": "Section Break",
+   "label": "Credential"
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Data",
+   "label": "API Key",
+   "unique": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "API Secret",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "password_fingerprint",
+   "fieldtype": "Data",
+   "label": "Password Fingerprint",
+   "hidden": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "section_revoke",
+   "fieldtype": "Section Break",
+   "label": "Revoked"
+  },
+  {
+   "fieldname": "revoked_on",
+   "fieldtype": "Datetime",
+   "label": "Revoked On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "revoke_reason",
+   "fieldtype": "Data",
+   "label": "Revoke Reason",
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1,
+   "create": 0,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "email": 0,
+   "print": 0,
+   "share": 0
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "user"
+}
