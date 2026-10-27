@@ -22,8 +22,9 @@ import frappe
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 
 from splinh.custom.call_monitoring_insights import ensure_call_monitoring_insights
-from splinh.custom.call_review import DROP_STAGE_OPTIONS
+from splinh.custom.call_review import DROP_STAGE_OPTIONS, NEXT_STAGE_OPTIONS
 from splinh.custom.kpi_dashboard_insights import ensure_kpi_dashboard_insights
+from splinh.custom.scorecard_schema import ensure_scorecard_schema
 
 # Plain fields on the Lead itself. 90 points here + 10 for the Contact's
 # designation (below) = 100. Mirrored in the Client Script - keep both in step.
@@ -93,12 +94,14 @@ def execute():
 		ensure_call_tracking,
 		_ensure_call_recording_player,
 		_ensure_call_manager_review_fields,
+		_ensure_call_review_base_fields,
 		_ensure_call_review_fields,
 		_ensure_call_remark_fields,
 		_ensure_caller_name_field,
 		_ensure_call_card_script,
 		_ensure_call_ai,
 		_ensure_user_inh_fields,
+		ensure_scorecard_schema,
 		_ensure_lead_duplicate_check,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
@@ -2800,6 +2803,49 @@ frappe.ui.form.on("Call Log", {
 	},
 });
 """
+
+
+# The three review fields that were first made by hand in the production UI (their option lists are owned there and
+# never re-asserted). Created here ONLY WHEN MISSING so a site built from this app (UAT, a new site) has them: the
+# Call Review API, the Call Log call card and the DILO call counts all read them by fieldname. permlevel 1 like the
+# other review fields, so only Call Tracker Manager / System Manager can edit them in the ERP form; the app writes
+# them with set_value on the rep's behalf. Leading blank option on purpose (see custom_source / call drop stage).
+CALL_REVIEW_BASE_FIELDS = [
+	{
+		"fieldname": "custom_next_stage",
+		"label": "Next Stage",
+		"fieldtype": "Select",
+		"options": NEXT_STAGE_OPTIONS,
+		"insert_after": "custom_call_drop_stage",
+		"permlevel": 1,
+	},
+	{
+		"fieldname": "custom_call_category",
+		"label": "Call Category",
+		"fieldtype": "Select",
+		"options": "\nNew Call\nFollow Up Call",
+		"insert_after": "custom_next_stage",
+		"permlevel": 1,
+	},
+	{
+		"fieldname": "custom_detailed_action",
+		"label": "Next Action",
+		"fieldtype": "Small Text",
+		"insert_after": "custom_call_category",
+		"permlevel": 1,
+	},
+]
+
+
+def _ensure_call_review_base_fields():
+	"""Create custom_next_stage / custom_call_category / custom_detailed_action on Call Log if missing. An existing
+	field (production has all three) is never touched, and its option list stays whatever the ERP UI says."""
+	for df in CALL_REVIEW_BASE_FIELDS:
+		if frappe.db.exists("Custom Field", f"Call Log-{df['fieldname']}"):
+			continue
+		frappe.get_doc({"doctype": "Custom Field", "dt": "Call Log", "is_system_generated": 0, **df}).insert(
+			ignore_permissions=True
+		)
 
 
 def _ensure_call_review_fields():
