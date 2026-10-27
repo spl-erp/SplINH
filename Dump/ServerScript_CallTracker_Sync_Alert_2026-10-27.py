@@ -9,7 +9,7 @@
 # ============================================================================
 DRY_RUN = True
 TEST_TO = ""
-STALE_HOURS = 4
+STALE_HOURS = 2
 EXCLUDE = ["dummy@splashjetink.com", "temp@gmail.com", "erp@splashjetink.com"]
 EXPORT_HEAD = "Exports Sales Head"
 NATIONAL_HEAD = "National Sales Head"
@@ -22,7 +22,7 @@ def head_info(sp_name):
     mail = row.custom_sales_person_email
     if not mail and row.employee:
         mail = frappe.db.get_value("Employee", row.employee, "user_id")
-    return row.lft, row.rgt, mail
+    return {"lft": row.lft, "rgt": row.rgt, "mail": mail}
 
 
 def sales_person_lft(user):
@@ -35,8 +35,8 @@ def sales_person_lft(user):
 
 
 try:
-    ex_l, ex_r, ex_mail = head_info(EXPORT_HEAD)
-    na_l, na_r, na_mail = head_info(NATIONAL_HEAD)
+    ex = head_info(EXPORT_HEAD)
+    na = head_info(NATIONAL_HEAD)
     now = frappe.utils.now_datetime()
     today = str(now)[:10]
     cutoff = frappe.utils.add_to_date(now, hours=-STALE_HOURS)
@@ -65,9 +65,9 @@ try:
         if u.custom_inh_last_alert and u.custom_inh_last_alert >= u.custom_inh_last_sync:
             continue  # already alerted for this silence; alerts again only after the phone uploads and goes quiet again
         lft = sales_person_lft(u.name)
-        if lft is not None and ex_l <= lft <= ex_r:
+        if lft is not None and ex["lft"] <= lft <= ex["rgt"]:
             groups["export"].append(u)
-        elif lft is not None and na_l <= lft <= na_r:
+        elif lft is not None and na["lft"] <= lft <= na["rgt"]:
             groups["national"].append(u)
         else:
             groups["unlinked"].append(u)
@@ -85,15 +85,19 @@ try:
     # who gets which list; unlinked people go to the National head with a note
     mails = []
     if groups["export"]:
-        mails.append((ex_mail, "Export", groups["export"], ""))
+        mails.append({"to": ex["mail"], "team": "Export", "users": groups["export"], "note": ""})
     nat_users = groups["national"] + groups["unlinked"]
     if nat_users:
         note = ""
         if groups["unlinked"]:
             note = "<p>Not linked to a Sales Person (please link them): %s</p>" % ", ".join([x.name for x in groups["unlinked"]])
-        mails.append((na_mail, "Domestic", nat_users, note))
+        mails.append({"to": na["mail"], "team": "Domestic", "users": nat_users, "note": note})
 
-    for to, team, users, note in mails:
+    for m in mails:
+        to = m["to"]
+        team = m["team"]
+        users = m["users"]
+        note = m["note"]
         subject = "Call Tracker: %d %s user(s) not uploading recordings" % (len(users), team)
         body = ("<p>These phones have not uploaded a call or recording for more than %d hours "
                 "(checked %s).</p>%s%s<p>Please ask them to open the Call Tracker app, check they are signed in, "

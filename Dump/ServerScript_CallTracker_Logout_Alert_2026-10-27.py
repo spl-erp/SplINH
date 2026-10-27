@@ -18,7 +18,7 @@ def head_info(sp_name):
     mail = row.custom_sales_person_email
     if not mail and row.employee:
         mail = frappe.db.get_value("Employee", row.employee, "user_id")
-    return row.lft, row.rgt, mail
+    return {"lft": row.lft, "rgt": row.rgt, "mail": mail}
 
 
 try:
@@ -29,11 +29,14 @@ try:
             emp = frappe.db.get_value("Employee", {"user_id": doc.user}, "name")
             if emp:
                 lft = frappe.db.get_value("Sales Person", {"employee": emp, "enabled": 1}, "lft")
-        ex_l, ex_r, ex_mail = head_info(EXPORT_HEAD)
-        na_l, na_r, na_mail = head_info(NATIONAL_HEAD)
-        team, to, note = "Domestic", na_mail, ""
-        if lft is not None and ex_l <= lft <= ex_r:
-            team, to = "Export", ex_mail
+        ex = head_info(EXPORT_HEAD)
+        na = head_info(NATIONAL_HEAD)
+        team = "Domestic"
+        to = na["mail"]
+        note = ""
+        if lft is not None and ex["lft"] <= lft <= ex["rgt"]:
+            team = "Export"
+            to = ex["mail"]
         elif lft is None:
             note = "<p>This user is not linked to a Sales Person, please link them.</p>"
         u = frappe.db.get_value("User", doc.user, ["full_name", "custom_inh_last_sync", "custom_inh_last_seen"], as_dict=True)
