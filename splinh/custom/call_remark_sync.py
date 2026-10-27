@@ -1,32 +1,26 @@
-"""Copy a Call Log's remark ("Next Action Remarks", custom_detailed_action) to the party it is about.
+"""A Call Log's remark ("Next Action Remarks", custom_detailed_action) and who made the call.
 
-Why: reps type a remark on the call, but the next time they call the same Lead or Customer they
-need to see what was said. So:
-  - a call linked to a LEAD  -> a row in the Lead's Notes (CRM Note child table);
-  - a call linked to a CUSTOMER -> a Comment on the Customer.
-One entry per call: editing the remark updates it, clearing the remark removes it, moving the call to
-another Lead/Customer moves it. Only the remark text is written (the note's author and time show in
-the standard UI). Nothing is written for an empty remark or a call linked to neither.
+The Call Log is the single source of truth: the Activity tab of a Lead / Customer / Contact / Opportunity already draws
+every linked call as a card (ERPNext's `get_linked_call_logs`), and the "Activity Call Card" Client Scripts
+(custom/splinh_setup.py) make that card show the caller, category, stages and remark. So nothing is copied into a Lead
+note or a Customer comment any more (an earlier version did; `collect_entries` / `delete_entries` remove what it made).
 
-Why plain Python here (not a Server/Client Script): remarks arrive through the mobile API, and the Lead
-must NOT be saved: a Lead save runs about ten hooks (SFA target engine, Duplicate Guard, Phone Lookup,
-score scripts, assignments) and bumps its modified time. The CRM Note row is written directly and the
-Comment through its own doctype.
+What is still kept in step here:
+  - the standard Call Log `summary` gets the remark (the stock card of any screen without our script shows it);
+  - `custom_caller_name`, the name shown on the card: the call owner's full name, else the Employee's name. It is
+    stored because the browser only knows the names of users it already loaded (otherwise the card shows an email).
 
-The two hidden Call Log fields (custom_lead_note_ref, custom_customer_comment_ref, created by
-splinh_setup._ensure_call_remark_fields) remember "<target>|<row or comment name>" so edits update the
-same entry instead of duplicating it. `sync_call_remark` never raises: a failure only writes an Error Log
-entry and can never fail a review.
+`sync_call_remark` never raises: a failure only writes an Error Log entry and can never fail a review.
 """
 
 import re
 
 import frappe
-from frappe.utils import escape_html, get_datetime, now_datetime
 
 REMARK_FIELD = "custom_detailed_action"
-LEAD_REF = "custom_lead_note_ref"
-CUSTOMER_REF = "custom_customer_comment_ref"
+CALLER_FIELD = "custom_caller_name"
+LEAD_REF = "custom_lead_note_ref"  # legacy: "<lead>|<CRM Note row name>" of the note an earlier version created
+CUSTOMER_REF = "custom_customer_comment_ref"  # legacy: "<customer>|<Comment name>"
 MAX_REMARK = 2000
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
 
@@ -41,11 +35,6 @@ def clean_remark(value):
 	return _CONTROL.sub("", str(value)).replace("\r\n", "\n").replace("\r", "\n").strip()[:MAX_REMARK]
 
 
-def remark_html(text):
-	"""The same markup Frappe's Text Editor stores: escaped text, line breaks as <br>."""
-	return '<div class="ql-editor read-mode"><p>{}</p></div>'.format(escape_html(text).replace("\n", "<br>"))
-
-
 def parse_ref(ref):
 	"""'<target>|<name>' -> (target, name); empty or malformed -> None."""
 	if not ref or "|" not in ref:
@@ -54,158 +43,59 @@ def parse_ref(ref):
 	return (target, name) if target and name else None
 
 
-def make_ref(target, name):
-	return f"{target}|{name}"
-
-
-def plan_sync(existing_ref, target, remark):
-	"""What to do for one side (Lead or Customer). `existing_ref` is the parsed ref or None.
-
-	  none    nothing to do
-	  create  no entry yet, remark and target present
-	  update  entry exists for this same target
-	  delete  entry exists but the remark was cleared or there is no target any more
-	  move    entry exists for a DIFFERENT target: delete it, create one on the new target"""
-	if not remark or not target:
-		return "delete" if existing_ref else "none"
-	if not existing_ref:
-		return "create"
-	return "update" if existing_ref[0] == target else "move"
+def tidy_name(value):
+	"""A person's name with stray spaces removed ('Ankit  Ingle ' -> 'Ankit Ingle')."""
+	return " ".join(str(value or "").split())
 
 
 # --------------------------------------------------------------- Frappe access
 
 
-def _author_and_time(call):
-	author = call.get("custom_reviewed_by") or call.get("owner") or frappe.session.user
-	when = call.get("custom_reviewed_at") or now_datetime()
-	return author, get_datetime(when)
+def caller_name(call):
+	"""Who made the call: the call owner's full name, else the name of the Employee in `call_received_by`, else ''.
+	`call` supports .get() (a Call Log document or a dict)."""
+	name = ""
+	if call.get("owner"):
+		name = tidy_name(frappe.db.get_value("User", call.get("owner"), "full_name"))
+	if not name and call.get("call_received_by"):
+		name = tidy_name(frappe.db.get_value("Employee", call.get("call_received_by"), "employee_name"))
+	return name
 
 
-def _create_lead_note(lead, html, author, when):
-	next_idx = frappe.db.sql(
-		"select coalesce(max(idx), 0) + 1 from `tabCRM Note` where parent=%s and parenttype='Lead' and parentfield='notes'",
-		(lead,),
-	)[0][0]
-	note = frappe.get_doc(
-		{
-			"doctype": "CRM Note",
-			"parent": lead,
-			"parenttype": "Lead",
-			"parentfield": "notes",
-			"idx": next_idx,
-			"note": html,
-			"added_by": author,
-			"added_on": when,
-		}
-	)
-	note.db_insert()  # the Lead itself is never saved: no Lead hooks, no modified bump
-	return note.name
+def fill_caller_name(doc, method=None):
+	"""Call Log validate hook: keep `custom_caller_name` filled (new calls from the app and from the ERP)."""
+	try:
+		name = caller_name(doc)
+		if name and doc.get(CALLER_FIELD) != name:
+			doc.set(CALLER_FIELD, name)
+	except Exception:
+		frappe.log_error(title="call_remark_sync: caller name failed", message=frappe.get_traceback())
 
 
-def _sync_lead(call, remark, author, when):
-	existing = parse_ref(call.get(LEAD_REF))
-	target = call.get("custom_lead") or None
-	if target and not frappe.db.exists("Lead", target):
-		frappe.log_error(
-			title="call_remark_sync: Lead missing", message=f"{call.get('name')} points at missing Lead {target}"
-		)
-		target = None
-	action = plan_sync(existing, target, remark)
-	html = remark_html(remark) if remark else ""
-
-	if action in ("delete", "move"):
-		frappe.db.delete("CRM Note", {"name": existing[1], "parent": existing[0], "parenttype": "Lead"})
-		call_ref = None
-	else:
-		call_ref = call.get(LEAD_REF)
-
-	if action == "update":
-		row = frappe.db.get_value("CRM Note", {"name": existing[1], "parent": existing[0]}, ["note"], as_dict=True)
-		if not row:
-			action = "create"  # someone deleted the note by hand: put it back
-		elif row.note != html:
-			frappe.db.set_value(
-				"CRM Note", existing[1], {"note": html, "added_by": author, "added_on": when}, update_modified=False
-			)
-	if action in ("create", "move"):
-		call_ref = make_ref(target, _create_lead_note(target, html, author, when))
-	if action in ("create", "move", "delete") and call_ref != call.get(LEAD_REF):
-		frappe.db.set_value("Call Log", call["name"], LEAD_REF, call_ref or "", update_modified=False)
-	return action
-
-
-def _sync_customer(call, remark, author, when):
-	existing = parse_ref(call.get(CUSTOMER_REF))
-	target = call.get("customer") or None
-	if target and not frappe.db.exists("Customer", target):
-		frappe.log_error(
-			title="call_remark_sync: Customer missing", message=f"{call.get('name')} points at missing Customer {target}"
-		)
-		target = None
-	action = plan_sync(existing, target, remark)
-	html = remark_html(remark) if remark else ""
-
-	if action in ("delete", "move"):
-		if frappe.db.exists("Comment", existing[1]):
-			frappe.delete_doc("Comment", existing[1], ignore_permissions=True, force=True)
-		call_ref = None
-	else:
-		call_ref = call.get(CUSTOMER_REF)
-
-	if action == "update":
-		if not frappe.db.exists("Comment", existing[1]):
-			action = "create"
-		else:
-			comment = frappe.get_doc("Comment", existing[1])
-			if comment.content != html:
-				comment.content = html
-				comment.save(ignore_permissions=True)
-	if action in ("create", "move"):
-		comment = frappe.get_doc(
-			{
-				"doctype": "Comment",
-				"comment_type": "Comment",
-				"reference_doctype": "Customer",
-				"reference_name": target,
-				"comment_email": author,
-				"comment_by": frappe.db.get_value("User", author, "full_name") or author,
-				"content": html,
-			}
-		).insert(ignore_permissions=True)
-		call_ref = make_ref(target, comment.name)
-	if action in ("create", "move", "delete") and call_ref != call.get(CUSTOMER_REF):
-		frappe.db.set_value("Call Log", call["name"], CUSTOMER_REF, call_ref or "", update_modified=False)
-	return action
+def _sync_summary(call, remark):
+	"""The remark into the standard `summary`. A cleared remark clears it: nothing else writes it."""
+	if (call.get("summary") or "") == remark:
+		return "none"
+	frappe.db.set_value("Call Log", call["name"], "summary", remark, update_modified=False)
+	return "set" if remark else "clear"
 
 
 def sync_call_remark(call_log_name):
-	"""Bring the Lead note and the Customer comment of this call in line with its remark.
-	Returns {"lead": action, "customer": action}; never raises."""
-	result = {"lead": "none", "customer": "none"}
+	"""Bring the summary and the caller name of this call in line with it. Returns {"summary": action}; never raises."""
+	result = {"summary": "none"}
 	try:
-		call = frappe.db.get_value(
-			"Call Log",
-			call_log_name,
-			[
-				"name",
-				"owner",
-				REMARK_FIELD,
-				"custom_lead",
-				"customer",
-				"custom_reviewed_by",
-				"custom_reviewed_at",
-				LEAD_REF,
-				CUSTOMER_REF,
-			],
-			as_dict=True,
-		)
+		fields = ["name", "owner", "call_received_by", REMARK_FIELD, "summary"]
+		has_caller_field = frappe.get_meta("Call Log").has_field(CALLER_FIELD)
+		if has_caller_field:
+			fields.append(CALLER_FIELD)
+		call = frappe.db.get_value("Call Log", call_log_name, fields, as_dict=True)
 		if not call:
 			return result
-		remark = clean_remark(call.get(REMARK_FIELD))
-		author, when = _author_and_time(call)
-		result["lead"] = _sync_lead(call, remark, author, when)
-		result["customer"] = _sync_customer(call, remark, author, when)
+		result["summary"] = _sync_summary(call, clean_remark(call.get(REMARK_FIELD)))
+		if has_caller_field:
+			name = caller_name(call)
+			if name and call.get(CALLER_FIELD) != name:
+				frappe.db.set_value("Call Log", call["name"], CALLER_FIELD, name, update_modified=False)
 	except Exception:
 		frappe.log_error(
 			title="call_remark_sync: could not sync a call remark",
@@ -215,65 +105,98 @@ def sync_call_remark(call_log_name):
 
 
 def on_call_log_update(doc, method=None):
-	"""Call Log on_update hook (edits made in the ERP form): sync only when the remark or the
-	Lead/Customer link changed. The mobile API writes with set_value (no hooks) and calls
-	sync_call_remark itself."""
+	"""Call Log on_update hook (edits made in the ERP form): refresh the summary when the remark changed. The mobile
+	API writes with set_value (no hooks) and calls sync_call_remark itself."""
 	try:
 		before = None if doc.is_new() else doc.get_doc_before_save()
-		if before is None:
-			changed = bool(clean_remark(doc.get(REMARK_FIELD)))
-		else:
-			changed = (
-				clean_remark(before.get(REMARK_FIELD)) != clean_remark(doc.get(REMARK_FIELD))
-				or (before.get("custom_lead") or "") != (doc.get("custom_lead") or "")
-				or (before.get("customer") or "") != (doc.get("customer") or "")
-			)
-		if changed:
+		before_remark = clean_remark(before.get(REMARK_FIELD)) if before else ""
+		if before_remark != clean_remark(doc.get(REMARK_FIELD)):
 			sync_call_remark(doc.name)
 	except Exception:
 		frappe.log_error(title="call_remark_sync: hook failed", message=frappe.get_traceback())
 
 
-def backfill(fix=False, limit=None, log=print):
-	"""Create the notes/comments for existing remarks. Only calls that have a remark, a Lead or Customer,
-	and no ref yet. Oldest review first. Returns {"rows": [...], "lead": n, "customer": n}."""
-	calls = frappe.db.sql(
-		f"""SELECT name FROM `tabCall Log`
-		WHERE IFNULL(`{REMARK_FIELD}`, '') <> ''
-		  AND (
-		    (IFNULL(custom_lead, '') <> '' AND IFNULL(`{LEAD_REF}`, '') = '')
-		    OR (IFNULL(customer, '') <> '' AND IFNULL(`{CUSTOMER_REF}`, '') = '')
-		  )
-		ORDER BY COALESCE(custom_reviewed_at, modified), creation
-		{"LIMIT %s" if limit else ""}""",
-		(int(limit),) if limit else (),
-		pluck="name",
+def backfill_caller_names(fix=False):
+	"""Fill `custom_caller_name` on calls that have none. One UPDATE; a dry run only counts. Returns {"calls": n}."""
+	where = f"IFNULL(c.`{CALLER_FIELD}`, '') = ''"
+	if not fix:
+		count = frappe.db.sql(f"SELECT COUNT(*) FROM `tabCall Log` c WHERE {where}")[0][0]
+		return {"calls": count}
+	frappe.db.sql(
+		f"""UPDATE `tabCall Log` c
+		LEFT JOIN `tabUser` u ON u.name = c.owner
+		LEFT JOIN `tabEmployee` e ON e.name = c.call_received_by
+		SET c.`{CALLER_FIELD}` = TRIM(COALESCE(NULLIF(TRIM(u.full_name), ''), NULLIF(TRIM(e.employee_name), ''), ''))
+		WHERE {where}"""
 	)
-	rows, lead, customer = [], 0, 0
-	for name in calls:
-		call = frappe.db.get_value(
-			"Call Log", name, [REMARK_FIELD, "custom_lead", "customer", "custom_reviewed_by", "owner"], as_dict=True
-		)
-		remark = clean_remark(call.get(REMARK_FIELD))
-		for kind, target in (("lead", call.custom_lead), ("customer", call.customer)):
-			if not target or not remark:
-				continue
+	return {"calls": frappe.db.sql("SELECT ROW_COUNT()")[0][0]}
+
+
+# ------------------------------------------- remove what the earlier version copied
+
+
+def collect_entries():
+	"""Every Lead note / Customer comment an earlier version created, found by the refs stored on the Call Logs.
+	Returns [{"kind", "call_log", "target", "entry", "author", "when", "html"}]; "html" is empty when the entry no
+	longer exists (deleted by hand). Nothing else is ever listed, so notes written by hand are safe."""
+	calls = frappe.db.sql(
+		f"""SELECT name, `{LEAD_REF}` AS lead_ref, `{CUSTOMER_REF}` AS customer_ref FROM `tabCall Log`
+		WHERE IFNULL(`{LEAD_REF}`, '') <> '' OR IFNULL(`{CUSTOMER_REF}`, '') <> ''
+		ORDER BY creation""",
+		as_dict=True,
+	)
+	rows = []
+	for call in calls:
+		lead = parse_ref(call.lead_ref)
+		if lead:
+			note = frappe.db.get_value(
+				"CRM Note",
+				{"name": lead[1], "parent": lead[0], "parenttype": "Lead"},
+				["added_by", "added_on", "note"],
+				as_dict=True,
+			)
 			rows.append(
 				{
-					"call_log": name,
-					"target_type": kind,
-					"target": target,
-					"author": call.custom_reviewed_by or call.owner,
-					"remark": remark,
+					"kind": "lead note",
+					"call_log": call.name,
+					"target": lead[0],
+					"entry": lead[1],
+					"author": note.added_by if note else "",
+					"when": note.added_on if note else "",
+					"html": note.note if note else "",
 				}
 			)
-			lead += kind == "lead"
-			customer += kind == "customer"
-		if fix:
-			sync_call_remark(name)
-			if lead + customer and (lead + customer) % 200 == 0:
-				frappe.db.commit()  # nosemgrep
-				log(f"  ... {lead + customer} done")
-	if fix:
-		frappe.db.commit()  # nosemgrep
-	return {"rows": rows, "lead": lead, "customer": customer}
+		customer = parse_ref(call.customer_ref)
+		if customer:
+			comment = frappe.db.get_value("Comment", customer[1], ["comment_email", "creation", "content"], as_dict=True)
+			rows.append(
+				{
+					"kind": "customer comment",
+					"call_log": call.name,
+					"target": customer[0],
+					"entry": customer[1],
+					"author": comment.comment_email if comment else "",
+					"when": comment.creation if comment else "",
+					"html": comment.content if comment else "",
+				}
+			)
+	return rows
+
+
+def delete_entries(entries, log=print):
+	"""Delete the entries from collect_entries() (write their backup first) and clear the refs on the Call Logs."""
+	done = 0
+	for row in entries:
+		if row["kind"] == "lead note":
+			frappe.db.delete("CRM Note", {"name": row["entry"], "parent": row["target"], "parenttype": "Lead"})
+			frappe.db.set_value("Call Log", row["call_log"], LEAD_REF, "", update_modified=False)
+		else:
+			if frappe.db.exists("Comment", row["entry"]):
+				frappe.delete_doc("Comment", row["entry"], ignore_permissions=True, force=True)
+			frappe.db.set_value("Call Log", row["call_log"], CUSTOMER_REF, "", update_modified=False)
+		done += 1
+		if done % 200 == 0:
+			frappe.db.commit()  # nosemgrep
+			log(f"  ... {done} done")
+	frappe.db.commit()  # nosemgrep
+	return done

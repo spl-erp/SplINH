@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from splinh.custom import call_remark_sync as c
 
@@ -21,23 +22,9 @@ class TestCleanRemark(unittest.TestCase):
 		self.assertEqual(c.clean_remark(14), "14")
 
 
-class TestRemarkHtml(unittest.TestCase):
-	def test_same_markup_as_the_text_editor(self):
-		self.assertEqual(c.remark_html("Follow up"), '<div class="ql-editor read-mode"><p>Follow up</p></div>')
-
-	def test_html_is_escaped(self):
-		out = c.remark_html("<script>alert(1)</script> & more")
-		self.assertNotIn("<script>", out)
-		self.assertIn("&lt;script&gt;", out)
-		self.assertIn("&amp;", out)
-
-	def test_line_breaks_become_br(self):
-		self.assertIn("line1<br>line2", c.remark_html("line1\nline2"))
-
-
 class TestRef(unittest.TestCase):
 	def test_roundtrip(self):
-		self.assertEqual(c.parse_ref(c.make_ref("CRM-LEAD-2026-06156", "7073")), ("CRM-LEAD-2026-06156", "7073"))
+		self.assertEqual(c.parse_ref("CRM-LEAD-2026-06156|7073"), ("CRM-LEAD-2026-06156", "7073"))
 
 	def test_target_names_with_pipes_use_the_last_separator(self):
 		self.assertEqual(c.parse_ref("A|B|99"), ("A|B", "99"))
@@ -47,29 +34,46 @@ class TestRef(unittest.TestCase):
 			self.assertIsNone(c.parse_ref(bad), bad)
 
 
-class TestPlanSync(unittest.TestCase):
-	REF = ("LEAD-1", "5")
+class TestTidyName(unittest.TestCase):
+	def test_spaces(self):
+		self.assertEqual(c.tidy_name(" Ankit  Nandkishor   Ingle "), "Ankit Nandkishor Ingle")
+		self.assertEqual(c.tidy_name(None), "")
 
-	def test_nothing_to_do(self):
-		self.assertEqual(c.plan_sync(None, None, ""), "none")
-		self.assertEqual(c.plan_sync(None, "LEAD-1", ""), "none")
-		self.assertEqual(c.plan_sync(None, None, "text"), "none")
 
-	def test_create(self):
-		self.assertEqual(c.plan_sync(None, "LEAD-1", "text"), "create")
+class TestCallerName(unittest.TestCase):
+	def names(self, user_name, employee_name):
+		def get_value(doctype, name, field):
+			return {"User": user_name, "Employee": employee_name}[doctype]
 
-	def test_update_same_target(self):
-		self.assertEqual(c.plan_sync(self.REF, "LEAD-1", "new text"), "update")
+		fake = mock.MagicMock()
+		fake.db.get_value.side_effect = get_value
+		return mock.patch.object(c, "frappe", fake)
 
-	def test_clearing_the_remark_deletes(self):
-		self.assertEqual(c.plan_sync(self.REF, "LEAD-1", ""), "delete")
+	def test_owner_full_name_first(self):
+		with self.names("Shubham Sharma", "Shubham Ratanlal Sharma"):
+			self.assertEqual(c.caller_name({"owner": "lfp3@x.com", "call_received_by": "E0052"}), "Shubham Sharma")
 
-	def test_no_target_any_more_deletes(self):
-		self.assertEqual(c.plan_sync(self.REF, None, "text"), "delete")
+	def test_employee_name_when_the_user_has_no_name(self):
+		with self.names("", "Ankit  Nandkishor  Ingle "):
+			self.assertEqual(c.caller_name({"owner": "a@x.com", "call_received_by": "E1"}), "Ankit Nandkishor Ingle")
 
-	def test_target_changed_moves(self):
-		self.assertEqual(c.plan_sync(self.REF, "LEAD-2", "text"), "move")
+	def test_nothing_known(self):
+		with self.names(None, None):
+			self.assertEqual(c.caller_name({"owner": "a@x.com"}), "")
+			self.assertEqual(c.caller_name({}), "")
 
+
+class TestSummary(unittest.TestCase):
+	def test_unchanged_summary_is_not_written(self):
+		with mock.patch.object(c, "frappe") as fake:
+			self.assertEqual(c._sync_summary({"name": "X", "summary": "Call back"}, "Call back"), "none")
+			fake.db.set_value.assert_not_called()
+
+	def test_set_and_clear(self):
+		with mock.patch.object(c, "frappe") as fake:
+			self.assertEqual(c._sync_summary({"name": "X", "summary": ""}, "Call back"), "set")
+			self.assertEqual(c._sync_summary({"name": "X", "summary": "Call back"}, ""), "clear")
+			self.assertEqual(fake.db.set_value.call_count, 2)
 
 if __name__ == "__main__":
 	unittest.main()

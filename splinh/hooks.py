@@ -6,6 +6,11 @@ app_email = "support@splashjetink.com"
 app_license = "mit"
 
 doc_events = {
+	# Sales Scorecard (doctype built in the UI): targets / Ach % on save, live actuals when opened.
+	"Sales Scorecard": {
+		"validate": "splinh.custom.scorecard.on_validate",
+		"onload": "splinh.custom.scorecard.on_load",
+	},
 	# Per-user "Record Calls" toggle: opens/closes a pause period only when that one field
 	# changes (custom/call_recording_pause.py).
 	"User": {"on_update": "splinh.custom.call_recording_pause.track_recording_toggle"},
@@ -23,12 +28,13 @@ doc_events = {
 	# stamp_erp_review: who/when/where a review was made when it is edited in the ERP form
 	# (custom/call_review.py), so the app never silently overwrites it.
 	"Call Log": {
-		# on_update: copy the remark to the Lead's Notes / the Customer's Comments when it (or the
-		# Lead/Customer link) is changed in the ERP form (custom/call_remark_sync.py).
+		# on_update: refresh the Call Log summary when the remark is changed in the ERP form;
+		# validate fill_caller_name: the name the Activity call card shows (custom/call_remark_sync.py).
 		"on_update": "splinh.custom.call_remark_sync.on_call_log_update",
 		"validate": [
 			"splinh.custom.call_log_manager_review.sync_manager_remarked_flag",
 			"splinh.custom.call_review.stamp_erp_review",
+			"splinh.custom.call_remark_sync.fill_caller_name",
 		]
 	},
 }
@@ -53,7 +59,13 @@ override_doctype_dashboards = {
 auth_hooks = ["splinh.custom.call_tracker_auth.enforce_token_scope"]
 
 scheduler_events = {
-	"daily": ["splinh.custom.call_tracker_auth.expire_unused_tokens"],
+	"daily": [
+		"splinh.custom.call_tracker_auth.expire_unused_tokens",
+		# every eligible person has this month's Sales Scorecard (the month rollover copies targets)
+		"splinh.custom.scorecard.ensure_current_month_scorecards",
+	],
+	# live actual call counts and Ach % on this month's scorecards (custom/scorecard.py)
+	"hourly": ["splinh.custom.scorecard.refresh_current_month_scorecards"],
 }
 
 # Re-apply local customisations that live as database records (Custom Fields,

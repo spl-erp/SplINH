@@ -95,6 +95,8 @@ def execute():
 		_ensure_call_manager_review_fields,
 		_ensure_call_review_fields,
 		_ensure_call_remark_fields,
+		_ensure_caller_name_field,
+		_ensure_call_card_script,
 		_ensure_call_ai,
 		_ensure_user_inh_fields,
 		_ensure_lead_duplicate_check,
@@ -2858,6 +2860,87 @@ def _ensure_call_remark_fields():
 				"is_system_generated": 0,
 			}
 		).insert(ignore_permissions=True)
+
+
+# ------------------------------------------------------------ Activity call card
+
+# The Activity tab shows every call linked to a Lead / Customer / Contact / Opportunity as a card drawn by ERPNext's
+# `call_link` template (apps/erpnext/.../templates/call_link.html, unmodified). Its sentence has an empty name for
+# calls pushed by the app (`from` is empty on outgoing calls and must stay that way: phone matching reads it) and it
+# shows only the plain summary. This Client Script swaps the template string in the form `setup` event so the card
+# names who made the call (Call Log `custom_caller_name`, filled by custom/call_remark_sync.py) and shows the
+# category, stages and remark. Everything it prints is escaped (Frappe's
+# `{{ }}` is NOT escaped). Disable the Client Scripts to get the stock card back.
+CALL_CARD_DOCTYPES = ("Lead", "Customer", "Contact", "Opportunity")
+
+CALL_CARD_JS = r"""// Managed by splinh.custom.splinh_setup - edits here are overwritten on migrate.
+// Activity call card: who made the call, category / stages, and the remark (replaces ERPNext's call_link template).
+frappe.ui.form.on("__DT__", {
+	setup() {
+		if (window.splinh_call_card_installed) return;
+		window.splinh_call_card_installed = true;
+		frappe.templates.call_link = `
+{% var e = frappe.utils.escape_html; var t = function (v) { return (v || "").toString().trim(); }; %}
+<div class="call-detail-wrapper">
+	<div class="head flex justify-between">
+		<div>
+			<span class="bold"> {{ e(obj.type) }} Call</span>
+			{% if (obj.duration) { %}<span class="text-muted"> • {{ frappe.format(obj.duration, { fieldtype: "Duration" }) }}</span>{% } %}
+			<span class="text-muted"> • {{ comment_when(obj.creation) }}</span>
+		</div>
+		<span>
+			<a class="action-btn" href="/app/call-log/{{ encodeURIComponent(obj.name) }}" title="{{ __("Open Call Log") }}">
+				<svg class="icon icon-sm"><use href="#icon-link-url" class="like-icon"></use></svg>
+			</a>
+		</span>
+	</div>
+	<div class="body pt-3">
+		{% var who = e(obj.custom_caller_name || frappe.user.full_name(obj.employee_user_id || obj.owner) || ""); %}
+		{% if (obj.type === "Incoming") { %}
+			<span> Incoming call from {{ e(obj.from) }}, received by <b>{{ who }}</b></span>
+		{% } else { %}
+			<span> Outgoing call made by <b>{{ who }}</b> to {{ e(obj.to) }}</span>
+		{% } %}
+		{% var detail = [t(obj.custom_call_category), t(obj.custom_call_drop_stage) ? "Drop stage: " + t(obj.custom_call_drop_stage) : "", t(obj.custom_next_stage) ? "Next: " + t(obj.custom_next_stage) : ""].filter(Boolean).join(" · "); %}
+		{% if (detail) { %}<div class="text-muted pt-2">{{ e(detail) }}</div>{% } %}
+		{% var remark = t(obj.custom_detailed_action) || t(obj.summary); %}
+		{% if (remark) { %}<div class="pt-2" style="white-space: pre-line;">{{ e(remark) }}</div>{% } %}
+		{% if (obj.recording_url) { %}<div class="margin-top"><audio controls src="{{ e(obj.recording_url) }}"></audio></div>{% } %}
+	</div>
+</div>`;
+		delete frappe.template.compiled.call_link; // a card drawn earlier in this session compiled the stock one
+	},
+});
+"""
+
+
+def _ensure_caller_name_field():
+	"""Call Log `custom_caller_name`: the name the Activity call card shows (the browser only knows the names of
+	users it already loaded, so the card would show an email). Filled by custom/call_remark_sync.py."""
+	if frappe.db.exists("Custom Field", "Call Log-custom_caller_name"):
+		return
+	frappe.get_doc(
+		{
+			"doctype": "Custom Field",
+			"dt": "Call Log",
+			"fieldname": "custom_caller_name",
+			"label": "Caller Name",
+			"fieldtype": "Data",
+			"insert_after": "call_received_by",
+			"read_only": 1,
+			"no_copy": 1,
+			"is_system_generated": 0,
+		}
+	).insert(ignore_permissions=True)
+
+
+def _ensure_call_card_script():
+	for dt in CALL_CARD_DOCTYPES:
+		_upsert(
+			"Client Script",
+			f"Activity Call Card - {dt}",
+			{"dt": dt, "view": "Form", "enabled": 1, "script": CALL_CARD_JS.replace("__DT__", dt)},
+		)
 
 
 def _ensure_call_ai():

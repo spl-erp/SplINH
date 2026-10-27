@@ -860,7 +860,7 @@ def submit_call_review(
 	values["custom_reviewed_by"] = frappe.session.user
 	values["custom_review_source"] = SOURCE_APP
 	frappe.db.set_value("Call Log", call_log_name, values, update_modified=False)
-	# The remark also goes to the Lead's Notes / the Customer's Comments (never fails the review).
+	# The remark also goes to the Call Log summary and the caller name is kept (never fails the review).
 	sync_call_remark(call_log_name)
 	return {"status": "updated" if current.custom_reviewed_at else "ok"}
 

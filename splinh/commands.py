@@ -443,30 +443,84 @@ def backfill_call_employee_command(context, dry_run=False):
 		frappe.destroy()
 
 
-@click.command("backfill-call-remarks")
-@click.option("--dry-run", is_flag=True, default=False, help="List what would be written; write nothing.")
-@click.option("--limit", type=int, default=None, help="Only the first N calls (oldest review first), for a small trial.")
-@click.option("--report", "report_path", default="call_remarks_backfill.csv", help="CSV of every note/comment written or planned.")
+def _use_stdlib_cssutils_logger():
+	"""Frappe's pdf module opens logs/cssutils.log the first time notification code loads. That file belongs to the
+	service user, so a command run by another OS user would die with PermissionError. This command never makes a
+	PDF: give cssutils a plain logger and leave every other Frappe logger alone."""
+	import logging
+
+	original = frappe.logger
+
+	def logger(module=None, *args, **kwargs):
+		return logging.getLogger("cssutils") if module == "cssutils" else original(module, *args, **kwargs)
+
+	frappe.logger = logger
+
+
+@click.command("setup-call-card")
+@click.option("--dry-run", is_flag=True, default=False, help="Report only; create and write nothing.")
 @pass_context
-def backfill_call_remarks_command(context, dry_run=False, limit=None, report_path="call_remarks_backfill.csv"):
-	"""Copy existing Call Log remarks to the Lead's Notes / the Customer's Comments (once).
+def setup_call_card_command(context, dry_run=False):
+	"""Set up the Activity call card: the Call Log `custom_caller_name` field, the four "Activity Call Card" Client
+	Scripts (updated in place), and the caller name on every existing call. Safe to re-run."""
+	from splinh.custom import splinh_setup
+	from splinh.custom.call_remark_sync import CALLER_FIELD, backfill_caller_names
 
-	Only calls with a remark, a Lead or Customer and no entry yet. Safe to re-run: calls already done
-	are skipped. Always run with --dry-run first and read the CSV."""
-	from splinh.custom.call_remark_sync import backfill
-
+	_use_stdlib_cssutils_logger()
 	frappe.init(site=get_site(context))
 	frappe.connect()
 	try:
-		result = backfill(fix=not dry_run, limit=limit, log=click.echo)
+		has_field = bool(frappe.db.exists("Custom Field", f"Call Log-{CALLER_FIELD}"))
+		click.echo(f"Call Log field {CALLER_FIELD}: {'exists' if has_field else 'missing'}")
+		if dry_run:
+			click.echo("\nDRY RUN - nothing written")
+			if has_field:
+				click.echo(f"  Call Logs that would get a caller name: {backfill_caller_names(fix=False)['calls']}")
+			else:
+				click.echo("  The field and the four Client Scripts would be created, then every Call Log named.")
+			return
+		splinh_setup._ensure_caller_name_field()
+		frappe.db.commit()  # nosemgrep
+		splinh_setup._ensure_call_card_script()
+		frappe.db.commit()  # nosemgrep
+		frappe.clear_cache(doctype="Call Log")
+		result = backfill_caller_names(fix=True)
+		frappe.db.commit()  # nosemgrep
+		click.echo(f"\nApplied: field and Client Scripts in place, {result['calls']} Call Logs given a caller name")
+	finally:
+		frappe.destroy()
+
+
+@click.command("remove-call-remark-entries")
+@click.option("--dry-run", is_flag=True, default=False, help="List what would be deleted; delete nothing.")
+@click.option("--report", "report_path", default="call_remark_entries_backup.csv", help="Backup CSV of every entry (written before any delete).")
+@pass_context
+def remove_call_remark_entries_command(context, dry_run=False, report_path="call_remark_entries_backup.csv"):
+	"""Delete the Lead notes and Customer comments an earlier version copied from Call Log remarks.
+
+	Only entries recorded on a Call Log (by their saved reference) are touched: notes written by hand never are.
+	A full backup CSV is written first. Always run with --dry-run first."""
+	from splinh.custom.call_remark_sync import collect_entries, delete_entries
+
+	_use_stdlib_cssutils_logger()
+	frappe.init(site=get_site(context))
+	frappe.connect()
+	try:
+		entries = collect_entries()
 		with open(report_path, "w", newline="", encoding="utf-8") as handle:
-			writer = csv.DictWriter(handle, fieldnames=["call_log", "target_type", "target", "author", "remark"])
+			writer = csv.DictWriter(handle, fieldnames=["kind", "call_log", "target", "entry", "author", "when", "html"])
 			writer.writeheader()
-			writer.writerows(result["rows"])
-		click.echo("\n" + ("DRY RUN - nothing written" if dry_run else "Applied"))
-		click.echo(f"  Lead notes      {result['lead']}")
-		click.echo(f"  Customer comments {result['customer']}")
-		click.echo(f"  report: {report_path}")
+			writer.writerows(entries)
+		notes = sum(1 for e in entries if e["kind"] == "lead note")
+		comments = len(entries) - notes
+		missing = sum(1 for e in entries if not e["html"])
+		click.echo("\n" + ("DRY RUN - nothing deleted" if dry_run else "Backup written, deleting"))
+		click.echo(f"  Lead notes        {notes}")
+		click.echo(f"  Customer comments {comments}")
+		click.echo(f"  already gone (only the reference is cleared): {missing}")
+		click.echo(f"  backup: {report_path}")
+		if not dry_run:
+			click.echo(f"\nDeleted {delete_entries(entries, log=click.echo)} entries")
 	finally:
 		frappe.destroy()
 
@@ -563,7 +617,8 @@ commands = [
 	verify_live_code_command,
 	rebuild_phone_lookup_command,
 	backfill_call_employee_command,
-	backfill_call_remarks_command,
+	setup_call_card_command,
+	remove_call_remark_entries_command,
 	map_leads_to_customers_command,
 	apply_lead_customer_map_command,
 	revert_lead_customer_map_command,

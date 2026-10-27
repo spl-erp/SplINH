@@ -46,6 +46,8 @@ ALLOWED_METHODS = (
 	"splinh.api.call_tracking.get_my_call_reviews",
 	"splinh.api.app_status.heartbeat",
 	"splinh.api.app_status.get_my_app_config",
+	"splinh.api.scorecard.get_my_dilo",
+	"splinh.api.scorecard.save_my_dilo",
 	"splinh.api.call_tracker_auth.app_logout",
 )
 ALLOWED_PATHS = frozenset(_API + method for method in ALLOWED_METHODS)
