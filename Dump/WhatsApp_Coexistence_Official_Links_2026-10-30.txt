@@ -1,0 +1,63 @@
+WHATSAPP COEXISTENCE: OFFICIAL META DOCUMENTATION LINKS
+Prepared 30 October 2026
+
+Coexistence means one phone number is used on the WhatsApp Business app and on the Cloud API at the same time.
+
+
+MAIN PAGE (read in full)
+
+Onboard WhatsApp Business app users (Meta, official)
+https://developers.facebook.com/docs/whatsapp/embedded-signup/custom-flows/onboarding-business-app-users
+
+Covers: who can use it (Business app version 2.24.17 or higher), how onboarding works,
+chat history and contact sync, the webhook events (smb_message_echoes, history,
+smb_app_state_sync, account_update), what is not supported, pricing note, 24-hour window rules,
+and how to disconnect.
+
+Meta has two address styles for its documentation. The same page also appeared in search results at:
+https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users/
+(this exact address was not opened; use whichever one loads for you)
+
+
+OTHER OFFICIAL META PAGES THAT MENTION COEXISTENCE
+
+Throughput (20 messages per second on a coexistence number)
+https://developers.facebook.com/documentation/business-messaging/whatsapp/throughput
+
+Embedded Signup version 4 (current setup flow; versions 2 and 3 ended on 15 October 2026)
+https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-4
+
+Embedded Signup overview (appeared in search results; not read)
+https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/overview/
+
+Marketing Messages API: onboard business customers (coexistence numbers and marketing messages)
+https://developers.facebook.com/documentation/business-messaging/whatsapp/marketing-messages/onboard-business-customers
+
+WhatsApp changelog (recent changes, new account events)
+https://developers.facebook.com/documentation/business-messaging/whatsapp/changelog
+
+Pricing (messages typed in the Business app are free; API messages are charged per message)
+https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing
+
+Messaging limits
+https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits
+
+Phone numbers (number caps, display name)
+https://developers.facebook.com/docs/whatsapp/cloud-api/phone-numbers
+
+
+NOT OFFICIAL (provider documentation, not Meta's own words)
+
+These facts appear only in provider documentation and were not found on any Meta page read:
+- One phone number per coexistence account, and a maximum of four coexistence accounts per business.
+- A waiting period of 1 to 2 months before reconnecting a number (Meta's page states no waiting period).
+Source for the first point: Infobip
+https://www.infobip.com/docs/whatsapp/manage-integration/coexistence
+
+
+WHAT TO CONFIRM WITH META
+
+- Meta's page says a Solution Partner or Tech Provider runs the onboarding. A route for a company
+  connecting its own number is not described. This is the main thing to ask Meta or your contact.
+- Whether a coexistence number counts toward the registered-number limit (2, rising to 20).
+- Whether a coexistence number can send marketing through Meta's Marketing Messages API.

@@ -75,3 +75,12 @@ after_migrate = ["splinh.custom.splinh_setup.execute"]
 
 # bench-level commands, e.g. `bench --site <site> export-doctype "Lead"`.
 commands = ["splinh.commands"]
+
+# Waba (the WhatsApp app) asks these functions who a phone number belongs to. See splinh/waba_bridge.py.
+waba_party_matchers = ["splinh.waba_bridge.match_party"]
+# ...and every record that holds the number (a person can be a Lead and a Contact at once).
+waba_party_all = ["splinh.waba_bridge.match_all_parties"]
+# ...and who looks after that customer (the conversation goes to them first), and the customer's language.
+waba_record_owner = ["splinh.waba_bridge.record_owner"]
+# ...and whether the record already says "do not contact" (Unsubscribed / Do Not Disturb), which blocks WhatsApp templates too.
+waba_opt_out = ["splinh.waba_bridge.opt_out"]
