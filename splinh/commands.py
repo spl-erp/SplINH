@@ -184,6 +184,7 @@ def rematch_call_logs_command(context, dry_run=False, batch_size=500):
 		)
 
 		if not result["discrepancies"]:
+			click.echo(f"  Label refresh (custom_linked_party only): {result['labels_updated']} row(s)")
 			click.echo(
 				f"  Dynamic Link backfill (Pass 1b, additive only): "
 				f"{result['dynamic_links_backfilled']} row(s) gained a Customer/Lead Dynamic Link row"

@@ -50,6 +50,8 @@ import requests
 from frappe.utils import get_bench_path
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from splinh.custom import call_ai_quota
+
 BASE_URL = "https://generativelanguage.googleapis.com"
 
 DEFAULT_MODELS = {"transcribe": "gemini-3.5-transcribe", "summary": "gemini-3.5-flash-lite"}
@@ -122,6 +124,12 @@ class AIError(Exception):
 	def __init__(self, message, status=None):
 		super().__init__(message)
 		self.status = status
+		self.retry_after = None  # seconds Google asked us to wait (429)
+		self.daily = False  # a 429 about the daily limit: waiting a minute will not help
+
+
+class Skipped(AIError):
+	"""The call cannot be analysed at all with the current setup (e.g. longer than the API tier allows)."""
 
 
 # ---------------------------------------------------------------------- config
@@ -249,13 +257,25 @@ def check_key(key):
 def _retryable(exc):
 	if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
 		return True
-	return isinstance(exc, AIError) and exc.status in (429, 500, 502, 503, 504)
+	if isinstance(exc, AIError) and exc.status == 429:
+		# only a short per-minute wait is worth retrying; a daily limit is handled by the quota queue
+		return not exc.daily and (exc.retry_after is None or exc.retry_after <= 60)
+	return isinstance(exc, AIError) and exc.status in (500, 502, 503, 504)
+
+
+_backoff = wait_exponential(multiplier=2, min=2, max=20)
+
+
+def _wait(retry_state):
+	"""Honour Google's "retry in Ns" when it gives one, else back off 2-20 s."""
+	after = getattr(retry_state.outcome.exception(), "retry_after", None)
+	return min(after + 1, 60) if after else _backoff(retry_state)
 
 
 @retry(
 	retry=retry_if_exception(_retryable),
 	stop=stop_after_attempt(3),
-	wait=wait_exponential(multiplier=2, min=2, max=20),
+	wait=_wait,
 	reraise=True,
 )
 def _request(method, url, *, timeout, auth=True, headers=None, **kwargs):
@@ -264,7 +284,10 @@ def _request(method, url, *, timeout, auth=True, headers=None, **kwargs):
 		headers["x-goog-api-key"] = api_key()
 	response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
 	if response.status_code >= 400:
-		raise AIError(f"Gemini API {response.status_code}: {response.text[:500]}", response.status_code)
+		error = AIError(f"Gemini API {response.status_code}: {response.text[:500]}", response.status_code)
+		if response.status_code == 429:
+			error.daily, error.retry_after = call_ai_quota.parse_429(response.text)
+		raise error
 	return response
 
 
@@ -420,10 +443,20 @@ def _transcribe(file, mimes, diarize, usage_log):
 			if e.status == 400 and "mime" in str(e).lower():
 				last_error = e
 				continue
+			if e.status == 429:
+				raise _throttled(e)  # Google's own limit: queue the call instead of failing it
 			raise
 		_record_usage(usage_log, models()["transcribe"], interaction)
 		return _output_text(interaction)
 	raise last_error
+
+
+def _throttled(error):
+	"""A 429 from the speech model, as a Throttled (never a failed call)."""
+	if error.daily:
+		reset = call_ai_quota.block_until_reset()
+		return call_ai_quota.Throttled(call_ai_quota.note("Google's daily limit was reached", reset), reset)
+	return call_ai_quota.Throttled(call_ai_quota.note("Google's per-minute limit is full"))
 
 
 def _chunk(text, size):
@@ -556,7 +589,7 @@ def _run_one_pass(file, mime, context, usage_log):
 	return transcript, parse_insights(json.dumps(data_json))
 
 
-def process_call(call_log_name, *, mode="two_step", diarize=None):
+def process_call(call_log_name, *, mode="two_step", diarize=None, paced=False):
 	"""Run the pipeline and return the result. Writes nothing to the database.
 
 	Raises AIError for anything the user should see. The uploaded Google copy is
@@ -574,6 +607,12 @@ def process_call(call_log_name, *, mode="two_step", diarize=None):
 		content = content.encode()
 
 	context, duration = _call_context(call_log_name)
+	rid = None
+	if mode == "two_step":  # the speech model is the rate-limited one; take a slot BEFORE uploading
+		try:
+			rid = call_ai_quota.reserve(call_ai_quota.estimate_tokens(duration), paced=paced)
+		except call_ai_quota.TooLong as e:
+			raise Skipped(str(e))
 	if diarize is None:
 		diarize = bool(conf("splinh_ai_diarization", False)) and 0 < duration <= DIARIZATION_MAX_SECONDS
 	mimes = AUDIO_MIME[os.path.splitext(audio.file_name)[1].lower()]
@@ -614,6 +653,9 @@ def process_call(call_log_name, *, mode="two_step", diarize=None):
 			else:
 				if not transcript:
 					raise AIError("The speech model returned an empty transcript (silence or unusable audio).")
+				call_ai_quota.settle(
+					rid, next((u["input_tokens"] for u in usage_log if u["model"] == models()["transcribe"]), None)
+				)
 				transcript = _romanize(transcript, usage_log)
 				insights = parse_insights(
 					_text_call(
@@ -692,24 +734,44 @@ def save_result(call_log_name, result):
 	)
 
 
-def run_call_ai(call_log_name, user):
-	"""Background job behind the button. Always ends in Completed or Failed and
-	always tells the browser, so the button never stays stuck on Processing."""
+def run_call_ai(call_log_name, user, requeue=False):
+	"""Background job behind the button. Always ends in Completed or Failed (or Skipped, or
+	back in the queue with `requeue`) and always tells the browser, so the button never
+	stays stuck on Processing. Returns "Completed" / "Failed" / "Skipped" / "Throttled"."""
+	outcome = "Failed"
 	try:
-		result = process_call(call_log_name)
+		result = process_call(call_log_name, paced=requeue)  # scheduled runs keep to the even daily pace
 		save_result(call_log_name, result)
+		outcome = "Completed"
+	except call_ai_quota.Throttled as e:
+		frappe.db.rollback()
+		if requeue:
+			# no quota right now: back to "no status", so the next scheduled run picks it up again
+			_set_status(call_log_name, "", "")
+			outcome = "Throttled"
+		else:
+			_set_status(call_log_name, "Failed", f"Waiting for the API quota ({e}). Try again later.")
+	except Skipped as e:
+		frappe.db.rollback()
+		_set_status(call_log_name, "Skipped", str(e))
+		outcome = "Skipped"
 	except Exception as e:
 		message = str(e) if isinstance(e, AIError) else f"Unexpected error: {e}"
 		frappe.db.rollback()
-		frappe.db.set_value(
-			"Call Log",
-			call_log_name,
-			{"custom_transcript_status": "Failed", "custom_transcript_error": message[:1000]},
-			update_modified=False,
-		)
+		_set_status(call_log_name, "Failed", message)
 		if not isinstance(e, AIError):
 			frappe.log_error(title="splinh call_ai: unexpected failure", message=f"{call_log_name}\n{frappe.get_traceback()}")
 	finally:
 		frappe.cache.delete_value(f"splinh_ai_running::{call_log_name}")
 		frappe.db.commit()
 		frappe.publish_realtime("splinh_call_ai_done", {"name": call_log_name}, user=user)
+	return outcome
+
+
+def _set_status(call_log_name, status, error):
+	frappe.db.set_value(
+		"Call Log",
+		call_log_name,
+		{"custom_transcript_status": status, "custom_transcript_error": error[:1000]},
+		update_modified=False,
+	)
