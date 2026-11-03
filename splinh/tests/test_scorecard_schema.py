@@ -25,6 +25,7 @@ CHILD_USED = {
 	"order_amount_expected", "order_amount_received", "order_amount_ach",
 	"payments_expected", "payments_received", "payments_ach", "remarks", "eod_saved_at",
 	"eod_submitted", "eod_submitted_at",
+	"plan_new_visits", "plan_followup_visits", "new_visits_received", "followup_visits_received",
 }
 
 
@@ -43,12 +44,14 @@ class TestScorecardSchema(unittest.TestCase):
 
 	def test_child_has_every_field_the_code_uses(self):
 		have = by_name(schema.CHILD_FIELDS)
-		needed = CHILD_USED | set(sc.ACH_FIELDS) | set(sc.extra_row_fields())
+		needed = CHILD_USED | set(sc.ACH_FIELDS) | set(sc.extra_row_fields()) | set(sc.reported_fields())
 		self.assertEqual(sorted(needed - set(have)), [])
 
 	def test_parent_has_every_field_the_code_uses(self):
 		have = by_name(schema.PARENT_FIELDS)
-		needed = PARENT_USED | set(sc.ACH_TOTALS) | set(sc.extra_parent_fields())
+		needed = PARENT_USED | set(sc.ACH_TOTALS) | set(sc.extra_parent_fields()) | {
+			"new_calls_final_total", "followup_calls_final_total"
+		}
 		self.assertEqual(sorted(needed - set(have)), [])
 		self.assertEqual((have["daily"]["fieldtype"], have["daily"]["options"]), ("Table", schema.CHILD))
 

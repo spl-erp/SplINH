@@ -26,6 +26,17 @@ Month so far (days up to today): month plan, orders, order amount and payments =
 actual on those days / month plan; days without a plan are simply left out (calls made on them still count in the
 month actual).
 
+Visits (app 1.7.0, typed by the rep, numbers only, no Ach %): plan_new_visits / plan_followup_visits in the plan group,
+new_visits_received / followup_visits_received at the end of the day.
+
+CALL COUNTS THE REP OWNS (app 1.7.0). Three numbers are stored per day, for the dashboards:
+  actual_new / actual_followup          the SYSTEM count from the Call Logs (never changed by the rep)
+  new_calls_reported / followup_calls_reported (+ the _set flag)   what the rep typed; flag off = typed nothing (an Int
+                                        column cannot hold NULL, so "nothing" is the flag, not the number)
+  new_calls_final / followup_calls_final    the one Ach % and the month use: the rep's number when the flag is on,
+                                        else the system count
+The parent keeps new_calls_actual_total (system) and new_calls_final_total (final) the same way.
+
 Auto fields are read-only in the UI and written here with the DB API (never a parent save), so no Version
 rows and no hooks fire. Locks (app only, server clock, today only): the plan group (plan and expected fields)
 until the manager's cut-off time, no late plan; the end-of-day group (received, remarks) and the off-day tick
@@ -54,12 +65,22 @@ EXTRAS = (
 	("quotation_amount", "amount"),
 )
 EXTRA_PLAN_FIELDS = tuple(f"{name}_expected" for name, _ in EXTRAS)
+VISIT_PLAN_FIELDS = ("plan_new_visits", "plan_followup_visits")
+VISIT_EOD_FIELDS = ("new_visits_received", "followup_visits_received")
+REPORTED_FIELDS = ("new_calls_reported", "followup_calls_reported")  # the rep's own call counts (None = typed nothing)
+MAX_DILO_COUNT = 9999  # visits and the rep's call counts (the app allows 4 digits)
 SOD_FIELDS = (
 	"plan_new_calls", "plan_followup_calls", "orders_expected", "order_amount_expected", "payments_expected",
-) + EXTRA_PLAN_FIELDS
-EOD_FIELDS = ("orders_received", "order_amount_received", "payments_received", "remarks", "off_day")
+) + EXTRA_PLAN_FIELDS + VISIT_PLAN_FIELDS
+EOD_FIELDS = (
+	"orders_received", "order_amount_received", "payments_received", "remarks", "off_day"
+) + VISIT_EOD_FIELDS + REPORTED_FIELDS
 # the figures a submitted day freezes ("Submit day": the rep's End of day is final; an ERP user can untick it)
-EOD_FIGURE_FIELDS = ("orders_received", "order_amount_received", "payments_received", "remarks")
+EOD_FIGURE_FIELDS = (
+	"orders_received", "order_amount_received", "payments_received", "remarks"
+) + VISIT_EOD_FIELDS + REPORTED_FIELDS
+# saving any of these is "the end of day was entered" (eod_saved_at)
+EOD_STAMP_FIELDS = EOD_FIGURE_FIELDS
 ROW_FIELD = {"plan_new_calls": "plan_new", "plan_followup_calls": "plan_followup"}
 REMARKS_MAX = 500
 
@@ -97,7 +118,7 @@ def ach(numerator, denominator):
 	return round(flt(numerator) / denominator * 100, 2)
 
 
-def clean_count(value, field):
+def clean_count(value, field, maximum=10**7):
 	if value is None or (isinstance(value, str) and not value.strip()):
 		return None
 	if isinstance(value, bool):
@@ -106,8 +127,10 @@ def clean_count(value, field):
 		number = float(value)
 	except (TypeError, ValueError):
 		raise InvalidDilo(f"{field} must be a whole number.", field)
-	if number != int(number) or number < 0 or number > 10**7:
+	if number != number or number != int(number) or number < 0:
 		raise InvalidDilo(f"{field} must be a whole number of 0 or more.", field)
+	if number > maximum:
+		raise InvalidDilo(f"{field} must be {maximum} or less.", field)
 	return int(number)
 
 
@@ -165,19 +188,42 @@ def has_plan(row):
 	return bool(row.get("plan_saved_at")) and not row.get("no_target")
 
 
+def effective_calls(row, kind):
+	"""The call count a day is measured by: the rep's own number when they typed one (the _set flag), else the system
+	count. `kind` is "new" or "followup"."""
+	if row.get(f"{kind}_calls_reported_set"):
+		return int(row.get(f"{kind}_calls_reported") or 0)
+	return int(row.get(f"actual_{kind}") or 0)
+
+
+def month_visit_totals(rows, today_date):
+	"""{"new": {"expected", "received"}, "followup": {...}} over the days up to today that have a plan (like orders)."""
+	today_date = getdate(today_date)
+	out = {kind: {"expected": 0, "received": 0} for kind in ("new", "followup")}
+	for row in rows:
+		if getdate(row.get("date")) <= today_date and has_plan(row):
+			for kind in out:
+				out[kind]["expected"] += int(row.get(f"plan_{kind}_visits") or 0)
+				out[kind]["received"] += int(row.get(f"{kind}_visits_received") or 0)
+	return out
+
+
 def apply_rules(parent, rows, today_date):
 	"""Recompute Ach % and the month-so-far totals from the plan.
 
 	`parent` and each row support .get()/.set() like a Frappe document (or a _dict wrapper). Actuals are read as
 	stored (refresh_scorecard fills them). The manager's target fields are not used."""
 	today_date = getdate(today_date)
-	totals = {"pn": 0, "pf": 0, "an": 0, "af": 0, "an_p": 0, "af_p": 0, "oe": 0, "or": 0, "ae": 0.0, "ar": 0.0, "pe": 0.0, "pr": 0.0}
+	totals = {"pn": 0, "pf": 0, "an": 0, "af": 0, "an_p": 0, "af_p": 0, "sn": 0, "sf": 0, "oe": 0, "or": 0, "ae": 0.0, "ar": 0.0, "pe": 0.0, "pr": 0.0}
 	extra = {name: {"exp": 0.0, "created": 0.0, "created_p": 0.0} for name, _ in EXTRAS}
 	for row in rows:
 		d = getdate(row.get("date"))
 		planned = has_plan(row)
-		row.set("ach_new", ach(row.get("actual_new"), row.get("plan_new")) if planned else None)
-		row.set("ach_followup", ach(row.get("actual_followup"), row.get("plan_followup")) if planned else None)
+		final_new, final_followup = effective_calls(row, "new"), effective_calls(row, "followup")
+		row.set("new_calls_final", final_new)
+		row.set("followup_calls_final", final_followup)
+		row.set("ach_new", ach(final_new, row.get("plan_new")) if planned else None)
+		row.set("ach_followup", ach(final_followup, row.get("plan_followup")) if planned else None)
 		row.set("orders_ach", ach(row.get("orders_received"), row.get("orders_expected")))
 		row.set("order_amount_ach", ach(row.get("order_amount_received"), row.get("order_amount_expected")))
 		row.set("payments_ach", ach(row.get("payments_received"), row.get("payments_expected")))
@@ -190,13 +236,15 @@ def apply_rules(parent, rows, today_date):
 				if planned:
 					extra[name]["exp"] += flt(row.get(f"{name}_expected"))
 					extra[name]["created_p"] += created
-			totals["an"] += int(row.get("actual_new") or 0)
-			totals["af"] += int(row.get("actual_followup") or 0)
+			totals["sn"] += int(row.get("actual_new") or 0)
+			totals["sf"] += int(row.get("actual_followup") or 0)
+			totals["an"] += final_new
+			totals["af"] += final_followup
 			if planned:
 				totals["pn"] += int(row.get("plan_new") or 0)
 				totals["pf"] += int(row.get("plan_followup") or 0)
-				totals["an_p"] += int(row.get("actual_new") or 0)
-				totals["af_p"] += int(row.get("actual_followup") or 0)
+				totals["an_p"] += final_new
+				totals["af_p"] += final_followup
 				totals["oe"] += int(row.get("orders_expected") or 0)
 				totals["or"] += int(row.get("orders_received") or 0)
 				totals["ae"] += flt(row.get("order_amount_expected"))
@@ -205,10 +253,13 @@ def apply_rules(parent, rows, today_date):
 				totals["pr"] += flt(row.get("payments_received"))
 	values = {
 		"new_calls_plan_total": totals["pn"],
-		"new_calls_actual_total": totals["an"],
+		"new_calls_actual_total": totals["sn"],  # the system count
+		"new_calls_final_total": totals["an"],  # what the rep's overwrite and the Ach % use
+
 		"new_calls_ach": ach(totals["an_p"], totals["pn"]),
 		"followup_calls_plan_total": totals["pf"],
-		"followup_calls_actual_total": totals["af"],
+		"followup_calls_actual_total": totals["sf"],
+		"followup_calls_final_total": totals["af"],
 		"followup_calls_ach": ach(totals["af_p"], totals["pf"]),
 		"orders_expected_total": totals["oe"],
 		"orders_received_total": totals["or"],
@@ -387,10 +438,22 @@ def _same_figure(sent, stored):
 
 def eod_submit_conflicts(submitted, values, stored):
 	"""End of day figures that may not change because the day is submitted: the ones in `values` (already cleaned)
-	that differ from the `stored` row. A repeat of the same figures (an app retry) is no conflict."""
+	that differ from the `stored` row. A repeat of the same figures (an app retry) is no conflict. For the rep's own
+	call counts None means "typed nothing" (stored as None when the flag is off), and a typed 0 differs from it."""
 	if not submitted:
 		return []
-	return [k for k in EOD_FIGURE_FIELDS if k in values and not _same_figure(values[k], stored.get(k))]
+	out = []
+	for k in EOD_FIGURE_FIELDS:
+		if k not in values:
+			continue
+		if k in REPORTED_FIELDS:
+			sent, was = values[k], stored.get(k)
+			same = (sent is None and was is None) or (sent is not None and was is not None and int(sent) == int(was))
+		else:
+			same = _same_figure(values[k], stored.get(k))
+		if not same:
+			out.append(k)
+	return out
 
 
 def stamp_submit(row, now):
@@ -408,6 +471,24 @@ def extras_ready():
 	last = EXTRAS[-1][0]
 	return bool(
 		frappe.get_meta(CHILD).has_field(f"{last}_ach") and frappe.get_meta(DOCTYPE).has_field(f"{last}_created_total")
+	)
+
+
+def visits_ready():
+	"""True once the four visit fields exist on the day rows (added in the Desk); until then the visit keys are ignored."""
+	meta = frappe.get_meta(CHILD)
+	return all(meta.has_field(f) for f in VISIT_PLAN_FIELDS + VISIT_EOD_FIELDS)
+
+
+def reported_fields():
+	return [f"{k}_calls_{part}" for k in ("new", "followup") for part in ("reported", "reported_set", "final")]
+
+
+def reported_ready():
+	"""True once the rep-owned call count fields exist on the day rows and the month totals (added in the Desk)."""
+	child, parent = frappe.get_meta(CHILD), frappe.get_meta(DOCTYPE)
+	return all(child.has_field(f) for f in reported_fields()) and all(
+		parent.has_field(f"{k}_calls_final_total") for k in ("new", "followup")
 	)
 
 
@@ -534,8 +615,11 @@ def refresh_scorecard(name):
 		"payments_expected_total", "payments_received_total", "payments_ach",
 	]
 	ready = extras_ready()
+	reported = reported_ready()
 	if ready:
 		parent_fields += extra_parent_fields()
+	if reported:
+		parent_fields += ["new_calls_final_total", "followup_calls_final_total"]
 	parent = frappe.db.get_value(DOCTYPE, name, parent_fields, as_dict=True)
 	if not parent:
 		return None
@@ -546,6 +630,8 @@ def refresh_scorecard(name):
 		"order_amount_expected", "order_amount_received", "order_amount_ach", "payments_expected", "payments_received", "payments_ach"]
 	if ready:
 		fields += extra_row_fields()
+	if reported:
+		fields += reported_fields()
 	rows = frappe.get_all(CHILD, filters={"parent": name}, fields=fields, order_by="date asc")
 	wrapped = []
 	for r in rows:
@@ -562,6 +648,8 @@ def refresh_scorecard(name):
 	row_keys = ["actual_new", "actual_followup", "ach_new", "ach_followup", "orders_ach", "order_amount_ach", "payments_ach"]
 	if ready:
 		row_keys += [f"{key}_{part}" for key, _ in EXTRAS for part in ("created", "ach")]
+	if reported:
+		row_keys += ["new_calls_final", "followup_calls_final"]
 	for w, original in zip(wrapped, rows):
 		changed = {k: stored(w[k]) for k in row_keys if stored(w.get(k)) != original.get(k)}
 		if changed:
@@ -581,9 +669,14 @@ def on_validate(doc, method=None):
 		# a plan entered in the ERP form (by a System Manager) counts as a saved plan
 		if not row.get("plan_saved_at") and any(
 			flt(row.get(k)) > 0
-			for k in ("plan_new", "plan_followup", "orders_expected", "order_amount_expected", "payments_expected") + EXTRA_PLAN_FIELDS
+			for k in ("plan_new", "plan_followup", "orders_expected", "order_amount_expected", "payments_expected")
+			+ EXTRA_PLAN_FIELDS
+			+ VISIT_PLAN_FIELDS
 		):
 			row.set("plan_saved_at", now)
+		for kind in ("new", "followup"):  # a number typed in the ERP form counts as the rep's number (a typed 0 needs the tick)
+			if not row.get(f"{kind}_calls_reported_set") and flt(row.get(f"{kind}_calls_reported")) > 0:
+				row.set(f"{kind}_calls_reported_set", 1)
 	if submit_ready() and submit_has_time():
 		for row in rows:
 			stamp_submit(row, now)

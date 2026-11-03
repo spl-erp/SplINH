@@ -1,0 +1,154 @@
+<div id="cm-root" class="cm-gate">
+
+  <!-- PAGE HEADER -->
+  <div id="cm-header">
+    <div id="cm-header-left">
+      <div id="cm-header-icon">&#128222;</div>
+      <div id="cm-header-text">
+        <div id="cm-title">Call Monitoring</div>
+        <div id="cm-subtitle">Real-time call activity &amp; performance</div>
+      </div>
+    </div>
+    <div id="cm-header-right">
+      <span id="cm-subtitle-range" style="font-size:11.5px;color:rgba(255,255,255,0.55)"></span>
+    </div>
+  </div>
+
+  <!-- FILTER BAR -->
+  <div id="cm-filters">
+  <div class="cm-fsec">
+    <div class="cm-ff"><label class="cm-fl" for="cm-from">From</label><input type="date" id="cm-from"></div>
+    <div class="cm-ff"><label class="cm-fl" for="cm-to">To</label><input type="date" id="cm-to"></div>
+  </div>
+  <div class="cm-fsec">
+    <div class="cm-ff cm-ff-emp"><label class="cm-fl" for="cm-emp">Employee Name</label><input type="text" id="cm-emp" autocomplete="off" placeholder="Select salesperson"></div>
+    <div class="cm-ff cm-ff-team"><label class="cm-fl" for="cm-team">Department</label><select id="cm-team"><option value="">All departments</option></select></div>
+  </div>
+  <div class="cm-fsec">
+    <div class="cm-ff cm-ff-sel"><label class="cm-fl" for="cm-dir">Call Type</label><select id="cm-dir"><option value="">All</option><option value="Incoming">Incoming</option><option value="Outgoing">Outgoing</option></select></div>
+    <div class="cm-ff cm-ff-sel"><label class="cm-fl" for="cm-cat">Call Category</label><select id="cm-cat"><option value="">All</option><option value="new">New Call</option><option value="follow">Follow Up Call</option><option value="none">Not set</option></select></div>
+    <div class="cm-ff cm-ff-sel"><label class="cm-fl" for="cm-rev">Comments</label><select id="cm-rev"><option value="">All</option><option value="reviewed">Updated</option><option value="not_reviewed">Not Updated</option></select></div>
+    <div class="cm-ff cm-ff-sel"><label class="cm-fl" for="cm-src">Call Source</label><select id="cm-src"><option value="">All Sources</option><option value="SIM">SIM</option><option value="WhatsApp">WhatsApp</option></select></div>
+  </div>
+  <div class="cm-fsec">
+    <div class="cm-ff"><label class="cm-fl" for="cm-dmin">Duration</label>
+      <div class="cm-dur"><input type="number" id="cm-dmin" min="0" step="any" placeholder="Min"><span class="cm-dur-dash">&ndash;</span><input type="number" id="cm-dmax" min="0" step="any" placeholder="Max"><select id="cm-dunit"><option value="1">sec</option><option value="60">min</option></select></div>
+    </div>
+  </div>
+  <div class="cm-factions"><button type="button" id="cm-apply" hidden>Apply</button><button type="button" class="cm-clear" id="cm-reset" title="Reset all filters to today">&#8634; Clear filters</button></div>
+</div>
+
+<!-- TEAM TABS (sticky) -->
+<div id="cm-tabs"></div>
+
+<!-- ACTIVE FILTER PILLS -->
+  <div id="cm-pills"></div>
+
+  <!-- BODY -->
+  <div id="cm-body"><div id="cm-pick-prompt">Select a salesperson above to see their calls and insights.</div>
+
+    <!-- LOADING -->
+    <div id="cm-loading">
+      <div class="cm-spinner"></div>
+      <span>Loading data&hellip;</span>
+    </div>
+
+    <!-- ERROR -->
+    <div id="cm-error"></div>
+
+    <!-- KPI TILES -->
+    <div id="cm-tiles"></div>
+    
+    <!-- EMPLOYEE LEADERBOARD -->
+    <div id="cm-leaderboard">
+      <div class="cm-lb-head">
+        <div>
+          <div class="cm-lb-title">Top Employees by Call Volume</div>
+          <div class="cm-lb-sub">Ranked by total calls in selected period</div>
+        </div>
+      </div>
+      <div class="cm-lb-grid" id="cm-lb-grid">
+        <div class="cm-lb-empty">Loading&hellip;</div>
+      </div>
+    </div>
+
+    <!-- CHARTS ROW -->
+    <div id="cm-charts-row">
+
+      <!-- Trend Chart (left, 60%) -->
+      <div class="cm-chart-card" id="cc-trend">
+        <div class="cm-chart-head">
+          <div>
+            <div class="cm-chart-title">Daily Call Volume</div>
+            <div class="cm-chart-sub">Calls per day over selected period</div>
+          </div>
+          <button class="cm-view-btn" data-chart="trend">View data &#9660;</button>
+        </div>
+        <div class="cm-chart-wrap"><canvas id="cm-chart-trend"></canvas></div>
+        <div class="cm-data-tbl" id="cm-tbl-trend"></div>
+      </div>
+
+      <!-- Outcomes Chart (right, 40%) -->
+      <div class="cm-chart-card" id="cc-status">
+        <div class="cm-chart-head">
+          <div>
+            <div class="cm-chart-title">Call Drop Stage</div>
+            <div class="cm-chart-sub">Stage chosen by the salesperson</div>
+          </div>
+          <button class="cm-view-btn" data-chart="status">View data &#9660;</button>
+        </div>
+        <div class="cm-chart-wrap"><canvas id="cm-chart-status"></canvas></div>
+        <div class="cm-data-tbl" id="cm-tbl-status"></div>
+      </div>
+
+    </div><!-- /#cm-charts-row -->
+
+    <!-- TEAM PERFORMANCE -->
+<div id="cm-team-card">
+  <div id="cm-team-head"><div><div class="cm-team-title">Team Performance</div><div class="cm-team-sub">Calls rolled up across each team's full branch. Click a team to drill down.</div></div></div>
+  <div id="cm-crumbs"></div>
+  <div class="cm-team-wrap"><table id="cm-team-table"><thead><tr><th>Team</th><th>Calls</th><th>Incoming</th><th>Outgoing</th><th>Missed</th><th>Unmapped</th><th>Incoming Talktime</th><th>Outgoing Talktime</th><th>Total Talktime</th></tr></thead><tbody id="cm-team-body"><tr><td colspan="9" class="cm-lb-empty">Loading&hellip;</td></tr></tbody></table></div>
+</div>
+
+<!-- EMPLOYEE LEADERBOARD -->
+<!--    <div id="cm-leaderboard">-->
+<!--      <div class="cm-lb-head">-->
+<!--        <div>-->
+<!--          <div class="cm-lb-title">Top Employees by Call Volume</div>-->
+<!--          <div class="cm-lb-sub">Ranked by total calls in selected period</div>-->
+<!--        </div>-->
+<!--      </div>-->
+<!--      <div class="cm-lb-grid" id="cm-lb-grid">-->
+<!--        <div class="cm-lb-empty">Loading&hellip;</div>-->
+<!--      </div>-->
+<!--    </div>-->
+
+    <!-- CALL LOG TABLE -->
+    <div id="cm-log-card">
+      <div id="cm-log-card-head">
+        <span id="cm-log-title">Call Log</span>
+        <div class="cm-pg"><span id="cm-page-info"></span><button id="cm-load-more" style="display:none">Load More</button></div>
+      </div>
+      <div class="cm-table-wrap">
+        <table id="cm-log-table">
+          <thead>
+            <tr>
+              <th class="cm-sortable" data-sort="time">Time <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="party">Linked Party <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="number">Number <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="type">Call Type <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="duration">Duration <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="summary">AI Summary <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="status">Status <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="stage">Call Drop Stage <span class="cm-sort-ind">↕</span></th>
+              <th class="cm-sortable" data-sort="source">Call Source <span class="cm-sort-ind">↕</span></th>
+            </tr>
+          </thead>
+          <tbody id="cm-log-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /#cm-body -->
+
+</div><!-- /#cm-root -->
