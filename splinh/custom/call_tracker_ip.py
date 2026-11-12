@@ -27,22 +27,25 @@ import frappe
 from splinh.custom.call_tracker_auth import (
 	SOURCE_HEADER,
 	TOKEN_DOCTYPE,
+	is_inbox_path,
 	is_request_allowed,
+	phone_inbox_enabled,
 	request_api_key,
 )
 
 PATCH_FLAG = "__splinh_call_tracker_ip_bypass__"
 
 
-def bypasses_ip_check(source, path, cmd, key, token_user, user):
+def bypasses_ip_check(source, path, cmd, key, token_user, user, phone_inbox=False):
 	"""True when this is a Call Tracker token request of `user` that may skip the restrict_ip list.
 
 	source: value of the Frappe-Authorization-Source header; path / cmd: the request path and `?cmd=`;
 	key: the key part of the Authorization header; token_user: the user of the enabled token with that
-	key (None when there is none); user: the user whose IP is being checked."""
+	key (None when there is none); user: the user whose IP is being checked; phone_inbox: the team
+	inbox on the phone is switched on, so its methods count as Call Tracker methods too."""
 	return bool(
 		source == TOKEN_DOCTYPE
-		and is_request_allowed(path, cmd)
+		and is_request_allowed(path, cmd, phone_inbox)
 		and key
 		and user
 		and token_user == user
@@ -58,7 +61,13 @@ def _is_call_tracker_request(user):
 		frappe.db.get_value(TOKEN_DOCTYPE, {"api_key": key, "enabled": 1}, "user") if key else None
 	)
 	return bypasses_ip_check(
-		request.headers.get(SOURCE_HEADER), request.path, frappe.form_dict.get("cmd"), key, token_user, user
+		request.headers.get(SOURCE_HEADER),
+		request.path,
+		frappe.form_dict.get("cmd"),
+		key,
+		token_user,
+		user,
+		phone_inbox=is_inbox_path(request.path) and phone_inbox_enabled(),
 	)
 
 

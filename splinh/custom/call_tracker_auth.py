@@ -117,6 +117,12 @@ def is_request_allowed(path, cmd=None, phone_inbox=False):
 	return path in ALLOWED_PATHS or (bool(phone_inbox) and path in WABA_INBOX_PATHS)
 
 
+def is_inbox_path(path):
+	"""Is this one of the phone-inbox methods (as opposed to the original Call Tracker ones)?"""
+	path = (path or "").rstrip("/")
+	return path in WABA_INBOX_PATHS and path not in ALLOWED_PATHS
+
+
 def phone_inbox_enabled():
 	"""Is the team inbox switched on for phones? False when Waba is not installed or the switch was never set."""
 	try:
@@ -364,9 +370,7 @@ def enforce_token_scope():
 	if request is None or request.headers.get(SOURCE_HEADER) != TOKEN_DOCTYPE:
 		return
 
-	path = request.path.rstrip("/")
-	inbox_call = path in WABA_INBOX_PATHS and path not in ALLOWED_PATHS
-	if not is_request_allowed(request.path, frappe.form_dict.get("cmd"), phone_inbox=inbox_call and phone_inbox_enabled()):
+	if not is_request_allowed(request.path, frappe.form_dict.get("cmd"), phone_inbox=is_inbox_path(request.path) and phone_inbox_enabled()):
 		frappe.throw("This credential cannot be used for that request.", frappe.PermissionError)
 
 	user = frappe.session.user

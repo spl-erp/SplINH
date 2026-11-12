@@ -182,3 +182,30 @@ class TestInstall(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestPhoneInboxAndTheIpCheck(unittest.TestCase):
+	"""The team inbox on the phone skips the restrict_ip list like the other Call Tracker methods, but only while it is switched on."""
+
+	INBOX = "/api/method/waba.api.inbox.thread"
+
+	def test_off_by_default_so_the_ip_check_still_applies(self):
+		self.assertFalse(ip.bypasses_ip_check(SOURCE, self.INBOX, None, "k", "a@x.com", "a@x.com"))
+		self.assertFalse(ip.bypasses_ip_check(SOURCE, self.INBOX, None, "k", "a@x.com", "a@x.com", phone_inbox=False))
+
+	def test_on_an_inbox_call_of_the_tokens_own_user_skips_it(self):
+		self.assertTrue(ip.bypasses_ip_check(SOURCE, self.INBOX, None, "k", "a@x.com", "a@x.com", phone_inbox=True))
+
+	def test_on_it_still_needs_the_token_the_user_and_no_cmd(self):
+		for args in (
+			("Other", self.INBOX, None, "k", "a@x.com", "a@x.com"),
+			(SOURCE, self.INBOX, "frappe.client.get_list", "k", "a@x.com", "a@x.com"),
+			(SOURCE, self.INBOX, None, "", "a@x.com", "a@x.com"),
+			(SOURCE, self.INBOX, None, "k", "b@x.com", "a@x.com"),
+			(SOURCE, "/api/method/waba.api.bots.publish", None, "k", "a@x.com", "a@x.com"),
+		):
+			self.assertFalse(ip.bypasses_ip_check(*args, phone_inbox=True), args)
+
+	def test_the_wrapper_asks_the_switch_only_for_inbox_paths(self):
+		src = open(ip.__file__, encoding="utf-8").read()
+		self.assertIn("phone_inbox=is_inbox_path(request.path) and phone_inbox_enabled()", src)
