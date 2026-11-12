@@ -211,3 +211,56 @@ class TestCleanText(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestPhoneInboxMethods(unittest.TestCase):
+	"""The team inbox on the phone: the same Waba calls the browser makes, usable by a token only while the switch is on."""
+
+	def setUp(self):
+		from splinh.custom import call_tracker_auth as c
+
+		self.c = c
+
+	def test_off_by_default_so_a_token_cannot_reach_any_inbox_call(self):
+		for method in self.c.WABA_INBOX_METHODS:
+			self.assertFalse(self.c.is_request_allowed("/api/method/" + method), method)
+			self.assertFalse(self.c.is_request_allowed("/api/method/" + method, None, phone_inbox=False), method)
+
+	def test_on_every_inbox_call_is_allowed_and_nothing_else_is_added(self):
+		for method in self.c.WABA_INBOX_METHODS:
+			self.assertTrue(self.c.is_request_allowed("/api/method/" + method, None, phone_inbox=True), method)
+		for path in (
+			"/api/method/waba.api.bots.publish",
+			"/api/method/waba.api.bots.save_draft",
+			"/api/method/waba.api.party.record_consent",
+			"/api/method/upload_file",
+			"/api/method/frappe.client.get_list",
+			"/api/method/waba.api.inbox.assets_version",
+		):
+			self.assertFalse(self.c.is_request_allowed(path, None, phone_inbox=True), path)
+
+	def test_cmd_form_is_still_refused(self):
+		self.assertFalse(self.c.is_request_allowed("/api/method/waba.api.inbox.thread", "frappe.client.get_list", phone_inbox=True))
+
+	def test_the_switch_reads_false_when_waba_is_missing_or_unset(self):
+		self.assertIn("def phone_inbox_enabled", open(self.c.__file__, encoding="utf-8").read())
+		self.assertFalse(self.c.is_request_allowed("/api/method/waba.api.mobile.me"))
+
+	def test_every_listed_inbox_method_really_exists_and_is_whitelisted(self):
+		import ast
+		import os
+
+		base = os.path.join(os.path.dirname(self.c.__file__), "..", "..", "..", "waba", "waba")
+		if not os.path.isdir(base):
+			self.skipTest("waba is not next to splinh")
+		for method in self.c.WABA_INBOX_METHODS:
+			parts = method.split(".")  # waba.api.inbox.thread or waba.reminders.remind
+			path = os.path.join(base, *parts[1:-1]) + ".py"
+			with open(path, encoding="utf-8") as f:
+				tree = ast.parse(f.read())
+			found = [
+				n for n in ast.walk(tree)
+				if isinstance(n, ast.FunctionDef) and n.name == parts[-1]
+				and any("whitelist" in ast.unparse(d) for d in n.decorator_list)
+			]
+			self.assertTrue(found, method + " is not a whitelisted function")

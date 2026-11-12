@@ -52,6 +52,48 @@ ALLOWED_METHODS = (
 )
 ALLOWED_PATHS = frozenset(_API + method for method in ALLOWED_METHODS)
 
+# The team inbox on the phone: the SAME Waba calls the browser makes (so the same visibility and rules), usable by a token only
+# while Waba Settings > "Phone inbox" is ticked. Every one of them checks the person's Waba role itself. Deliberately absent: the
+# bot builder, settings, consent editing and core file upload (a send of a device file gets its own call before it is offered).
+WABA_INBOX_METHODS = (
+	"waba.api.mobile.me",
+	"waba.api.inbox.my_numbers",
+	"waba.api.inbox.conversations",
+	"waba.api.inbox.summary",
+	"waba.api.inbox.unread_total",
+	"waba.api.inbox.thread",
+	"waba.api.inbox.transfer_targets",
+	"waba.api.inbox.transfer",
+	"waba.api.inbox.unassign",
+	"waba.api.inbox.take_over_from_bot",
+	"waba.api.inbox.set_status",
+	"waba.api.inbox.add_note",
+	"waba.api.inbox.quick_replies",
+	"waba.api.inbox.set_available",
+	"waba.api.send.send_text",
+	"waba.api.send.send_template",
+	"waba.api.send.templates_for",
+	"waba.api.send.template_form",
+	"waba.api.send.mark_read",
+	"waba.api.send.send_file",
+	"waba.api.send.send_document",
+	"waba.api.send.shared_files",
+	"waba.api.send.send_library_file",
+	"waba.api.send.send_reaction",
+	"waba.api.send.retry_message",
+	"waba.api.party.context",
+	"waba.api.party.template_form",
+	"waba.api.party.start_chat",
+	"waba.api.party.search_people",
+	"waba.api.media.file",
+	"waba.api.media.retry",
+	"waba.reminders.remind",
+	"waba.reminders.my_reminders",
+	"waba.reminders.done_reminder",
+	"waba.reminders.cancel_reminder",
+)
+WABA_INBOX_PATHS = frozenset(_API + method for method in WABA_INBOX_METHODS)
+
 DEVICE_ID = re.compile(r"[A-Za-z0-9._:-]{6,64}")
 EMAIL = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
 
@@ -63,14 +105,24 @@ LAST_USED_THROTTLE_SECONDS = 10 * 60
 # ------------------------------------------------------------------ pure rules
 
 
-def is_request_allowed(path, cmd=None):
-	"""A request made with a Call Tracker token may only call an allowlisted method.
+def is_request_allowed(path, cmd=None, phone_inbox=False):
+	"""A request made with a Call Tracker token may only call an allowlisted method (and, while the phone inbox is switched on,
+	one of the inbox methods).
 
 	`cmd` must be empty: frappe.app handles the deprecated `?cmd=` form BEFORE the /api/ route,
 	so an allowlisted path with `cmd=frappe.client.get_list` would otherwise run another method."""
 	if cmd:
 		return False
-	return (path or "").rstrip("/") in ALLOWED_PATHS
+	path = (path or "").rstrip("/")
+	return path in ALLOWED_PATHS or (bool(phone_inbox) and path in WABA_INBOX_PATHS)
+
+
+def phone_inbox_enabled():
+	"""Is the team inbox switched on for phones? False when Waba is not installed or the switch was never set."""
+	try:
+		return bool(frappe.utils.cint(frappe.db.get_single_value("Waba Settings", "mobile_inbox_enabled")))
+	except Exception:
+		return False
 
 
 def clean_device_id(value):
@@ -312,7 +364,9 @@ def enforce_token_scope():
 	if request is None or request.headers.get(SOURCE_HEADER) != TOKEN_DOCTYPE:
 		return
 
-	if not is_request_allowed(request.path, frappe.form_dict.get("cmd")):
+	path = request.path.rstrip("/")
+	inbox_call = path in WABA_INBOX_PATHS and path not in ALLOWED_PATHS
+	if not is_request_allowed(request.path, frappe.form_dict.get("cmd"), phone_inbox=inbox_call and phone_inbox_enabled()):
 		frappe.throw("This credential cannot be used for that request.", frappe.PermissionError)
 
 	user = frappe.session.user
