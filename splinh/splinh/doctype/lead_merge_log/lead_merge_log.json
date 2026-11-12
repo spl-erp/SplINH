@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "LMERGE-.#####",
+ "creation": "2026-11-05 10:00:00.000000",
+ "description": "One row per Lead merge (Lead list > Actions > Merge Leads): who merged what, which values were chosen, and a full copy of every Lead that was merged away, so a mistake can be restored by hand.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "main_lead",
+  "merged_leads",
+  "column_break_lml1",
+  "merged_by",
+  "merged_on",
+  "section_break_lml1",
+  "changes",
+  "field_choices",
+  "link_counts",
+  "snapshot"
+ ],
+ "fields": [
+  {
+   "fieldname": "main_lead",
+   "fieldtype": "Data",
+   "label": "Main Lead",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "merged_leads",
+   "fieldtype": "Small Text",
+   "label": "Merged Leads (deleted)",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_lml1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "merged_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Merged By",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "merged_on",
+   "fieldtype": "Datetime",
+   "label": "Merged On",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "section_break_lml1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "changes",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Changes To The Main Lead (before and after)",
+   "read_only": 1,
+   "description": "Field values the main Lead had before the merge and what they became, plus child rows that were added."
+  },
+  {
+   "fieldname": "field_choices",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Choices Made In The Dialog",
+   "read_only": 1
+  },
+  {
+   "fieldname": "link_counts",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Records Moved To The Main Lead",
+   "read_only": 1,
+   "description": "Per merged-away Lead: how many records of each doctype pointed at it before the merge."
+  },
+  {
+   "fieldname": "snapshot",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Copy Of The Merged-Away Leads (JSON)",
+   "read_only": 1,
+   "description": "The complete Lead documents, child tables included, as they were just before the merge."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-11-05 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "Lead Merge Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

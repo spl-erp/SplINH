@@ -63,3 +63,7 @@ Frappe-Authorization-Source: Call Tracker Token
 6. Change the rep's password (administrator): next call 401, sign in again needs the new password (and a code if outside).
 7. Call any other ERP URL with the credential: 403.
 8. Call sync, recordings, reviews, heartbeat behave exactly as before.
+
+## Update 2026-11-03: IP check after the Frappe update (no app change needed)
+
+The 2 Nov server update (Frappe 16.51) started to check the user's allowed-IP list for every request that carries an `Authorization` header, which blocked Call Tracker token requests from outside the office with `401 Access not allowed from this IP Address` (sign-in and OTP still worked, but sync, recordings, heartbeat, reviews and DILO did not). The server now exempts Call Tracker token requests again (only: the `Frappe-Authorization-Source: Call Tracker Token` header, one of the allowlisted endpoints, and a valid token of that same user). The app sends nothing new and needs no release. Until the server fix is live, calls made while blocked stay on the phone and upload by themselves afterwards; if a phone treated the 401 as "signed out" the rep may have to sign in again once.

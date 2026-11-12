@@ -177,6 +177,7 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 		"before_neither": _neither_count(),
 		"verified_consistent": 0,
 		"discrepancies": [],
+		"labels_updated": 0,
 		"dynamic_links_backfilled": 0,
 		"dynamic_links_missing_target": [],
 		"scanned_unlinked": 0,
@@ -208,6 +209,7 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 		# Dynamic Link backfill (after the discrepancy gate) runs over this
 		# list, never over a row with an unresolved discrepancy.
 		consistent = []
+		relabel = []  # (call log, new custom_linked_party) where only the label differs
 		for name in linked_names:
 			doc = frappe.get_doc("Call Log", name)
 			expected = _resolve_linked_party(doc)
@@ -216,11 +218,15 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 				"custom_lead": doc.custom_lead or None,
 				"custom_linked_party": doc.custom_linked_party or "",
 			}
-			if expected != actual:
+			# The readable label may change (e.g. Lead label now shows the organisation): a label-only
+			# difference is not a discrepancy, it is refreshed in Pass 1c below.
+			if (expected["customer"], expected["custom_lead"]) != (actual["customer"], actual["custom_lead"]):
 				result["discrepancies"].append({"name": name, "stored": actual, "recomputed": expected})
 			else:
 				result["verified_consistent"] += 1
 				consistent.append((doc, expected))
+				if expected["custom_linked_party"] != actual["custom_linked_party"]:
+					relabel.append((name, expected["custom_linked_party"]))
 
 		if result["discrepancies"]:
 			# Stop here - do not touch the unlinked rows either. Reported,
@@ -250,6 +256,15 @@ def rematch_call_logs(batch_size=500, dry_run=False):
 				result["dynamic_links_missing_target"].append(
 					{"name": doc.name, "link_doctype": party_doctype, "link_name": party_name}
 				)
+
+		# --- Pass 1c: refresh the readable label only (customer/lead untouched, `modified` untouched) ---
+		for i, (name, label) in enumerate(relabel, 1):
+			frappe.db.set_value("Call Log", name, "custom_linked_party", label, update_modified=False)
+			result["labels_updated"] += 1
+			if not dry_run and i % batch_size == 0:
+				frappe.db.commit()
+		if relabel and not dry_run:
+			frappe.db.commit()
 
 		# --- Pass 2: correct genuinely unlinked rows ------------------------
 		while True:

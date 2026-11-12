@@ -210,7 +210,9 @@ def _resolve_linked_party(doc):
 		name_ = frappe.db.get_value("Customer", customer, "customer_name") or customer
 		return {"customer": customer, "custom_lead": None, "custom_linked_party": f"Customer: {name_}"}
 	if lead:
-		name_ = frappe.db.get_value("Lead", lead, "lead_name") or lead
+		# the organisation (like the Customer branch), not the person's Full Name; person is the fallback
+		names = frappe.db.get_value("Lead", lead, ["company_name", "lead_name"], as_dict=True) or {}
+		name_ = (names.get("company_name") or "").strip() or names.get("lead_name") or lead
 		return {"customer": None, "custom_lead": lead, "custom_linked_party": f"Lead: {name_}"}
 	return {"customer": None, "custom_lead": None, "custom_linked_party": ""}
 

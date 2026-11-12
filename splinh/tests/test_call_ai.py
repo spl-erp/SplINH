@@ -210,7 +210,7 @@ class TestSpeechModelFallback(unittest.TestCase):
 		)
 		fake_file = mock.Mock()
 		fake_file.get_content.return_value = b"x"
-		with mock.patch.multiple(call_ai, **patches), mock.patch.object(call_ai.frappe, "get_doc", return_value=fake_file), mock.patch.object(
+		with mock.patch.multiple(call_ai, **patches), mock.patch.object(call_ai.call_ai_quota, "reserve", lambda est, paced=False: "rid"), mock.patch.object(call_ai.frappe, "get_doc", return_value=fake_file), mock.patch.object(
 			call_ai.frappe, "local", mock.Mock(site="s")
 		):
 			insights_result = dict(insights, language="en", interest_level="Low")

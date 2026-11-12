@@ -55,7 +55,7 @@ def _find_scorecard(user, the_date):
 	return None
 
 
-def _row_view(row, submit=False):
+def _row_view(row, submit=False, visits=False, reported=False):
 	off = bool(cint(row.no_target))
 	planned = sc.has_plan(row)
 	eod = bool(row.eod_saved_at)
@@ -67,9 +67,9 @@ def _row_view(row, submit=False):
 		"plan_new": cint(row.plan_new),
 		"plan_followup": cint(row.plan_followup),
 		"actual_new": cint(row.actual_new),
-		"ach_new": sc.ach(row.actual_new, row.plan_new) if planned else None,
+		"ach_new": sc.ach(sc.effective_calls(row, "new"), row.plan_new) if planned else None,
 		"actual_followup": cint(row.actual_followup),
-		"ach_followup": sc.ach(row.actual_followup, row.plan_followup) if planned else None,
+		"ach_followup": sc.ach(sc.effective_calls(row, "followup"), row.plan_followup) if planned else None,
 		"orders_expected": cint(row.orders_expected),
 		"orders_received": cint(row.orders_received),
 		"orders_ach": sc.ach(row.orders_received, row.orders_expected) if eod else None,
@@ -82,6 +82,27 @@ def _row_view(row, submit=False):
 		"remarks": row.remarks or "",
 		**({"eod_submitted": bool(cint(row.get("eod_submitted")))} if submit else {}),
 		**_extra_row_view(row, planned),
+		**(_visit_row_view(row) if visits else {}),
+		**(_reported_row_view(row) if reported else {}),
+	}
+
+
+def _visit_row_view(row):
+	"""The rep's typed visits of one day (numbers only, no Ach %)."""
+	return {
+		"new_visits_expected": cint(row.get("plan_new_visits")),
+		"new_visits_received": cint(row.get("new_visits_received")),
+		"followup_visits_expected": cint(row.get("plan_followup_visits")),
+		"followup_visits_received": cint(row.get("followup_visits_received")),
+	}
+
+
+def _reported_row_view(row):
+	"""The rep's own call counts of one day: the number they typed, or null when they typed nothing (the system
+	count in actual_new / actual_followup then drives the day)."""
+	return {
+		f"{kind}_calls_reported": cint(row.get(f"{kind}_calls_reported")) if cint(row.get(f"{kind}_calls_reported_set")) else None
+		for kind in ("new", "followup")
 	}
 
 
@@ -128,12 +149,13 @@ def _payload(name, the_date):
 	rows = frappe.get_all(sc.CHILD, filters={"parent": name}, fields=["*"], order_by="date asc")
 	activity = sc.month_activity(parent.user, parent.month_start)  # None when it cannot be computed
 	submit = sc.submit_ready()
-	days = [{**_row_view(r, submit), **_activity_row(activity, r.date)} for r in rows]
+	visits, reported = sc.visits_ready(), sc.reported_ready()
+	days = [{**_row_view(r, submit, visits, reported), **_activity_row(activity, r.date)} for r in rows]
 	the_date = getdate(the_date)
 	row = next((r for r in rows if getdate(r.date) == the_date), None)
 	now = now_datetime()
 	lock = sc.locks(now, the_date, _cutoff())
-	v = _row_view(row, submit) if row else None
+	v = _row_view(row, submit, visits, reported) if row else None
 	plan_new = v["plan_new"] if v else 0
 	plan_fu = v["plan_followup"] if v else 0
 	today_activity = _activity_row(activity, the_date)
@@ -159,6 +181,14 @@ def _payload(name, the_date):
 			"payments_expected": v["payments_expected"] if v else 0.0,
 			"saved": bool(row and row.plan_saved_at),
 			**{name: (v[f"{name}_expected"] if v else _extra_num(kind, 0)) for name, kind in sc.EXTRAS},
+			**(
+				{
+					"new_visits": v["new_visits_expected"] if v else 0,
+					"followup_visits": v["followup_visits_expected"] if v else 0,
+				}
+				if visits
+				else {}
+			),
 		},
 		"actual": {
 			"new_calls": v["actual_new"] if v else 0,
@@ -186,6 +216,22 @@ def _payload(name, the_date):
 			"remarks": v["remarks"] if v else "",
 			"saved": bool(row and row.eod_saved_at),
 			**(_submitted_view(row) if submit else {}),
+			**(
+				{
+					"new_visits_received": v["new_visits_received"] if v else 0,
+					"followup_visits_received": v["followup_visits_received"] if v else 0,
+				}
+				if visits
+				else {}
+			),
+			**(
+				{
+					"new_calls_reported": v["new_calls_reported"] if v else None,
+					"followup_calls_reported": v["followup_calls_reported"] if v else None,
+				}
+				if reported
+				else {}
+			),
 		},
 		"locks": {
 			"plan_editable": lock["plan_editable"],
@@ -196,8 +242,9 @@ def _payload(name, the_date):
 			"month_start": str(parent.month_start),
 			"plan": month_plan,
 			"actual": {
-				"new_calls": cint(parent.new_calls_actual_total),
-				"followup_calls": cint(parent.followup_calls_actual_total),
+				# the system total, or (once the rep can overwrite) the total on the same basis as the Ach %
+				"new_calls": cint(parent.new_calls_final_total if reported else parent.new_calls_actual_total),
+				"followup_calls": cint(parent.followup_calls_final_total if reported else parent.followup_calls_actual_total),
 				**{name: _extra_num(kind, parent.get(f"{name}_created_total")) for name, kind in sc.EXTRAS},
 				"opportunities_updated": month_total["opportunities_updated"],
 				"quotations_updated": month_total["quotations_updated"],
@@ -224,6 +271,7 @@ def _payload(name, the_date):
 				"received": flt(parent.order_amount_received_total),
 			},
 			"payments": {"expected": flt(parent.payments_expected_total), "received": flt(parent.payments_received_total)},
+			**({"visits": sc.month_visit_totals(rows, today())} if visits else {}),
 			"days": days,
 		},
 		"server_time": now.isoformat(timespec="seconds"),
@@ -273,6 +321,10 @@ def save_my_dilo(
 	opportunity_amount_expected=None,
 	quotations_expected=None,
 	quotation_amount_expected=None,
+	plan_new_visits=None,
+	plan_followup_visits=None,
+	new_visits_received=None,
+	followup_visits_received=None,
 	off_day=None,
 	orders_received=None,
 	order_amount_received=None,
@@ -283,7 +335,9 @@ def save_my_dilo(
 ):
 	"""Save today's plan (until the cut-off, no late plan) and the end-of-day figures / off-day tick (until midnight).
 	`submit_eod: true` saves the figures sent and submits the day: the End of day figures are then locked (an ERP user
-	can reopen it). Only the keys sent change; unknown keys are ignored."""
+	can reopen it). Only the keys sent change; unknown keys are ignored. `new_calls_reported` / `followup_calls_reported`
+	(the rep's own call counts) are read from the extra keys because null means something there: a number is stored as the
+	rep's count, null (or empty) clears it so the system count drives the day again, and an absent key changes nothing."""
 	user = _user_or_throw()
 	if not sc.scorecard_ready():
 		return _respond(503, "not_ready", "The scorecard is not set up yet.")
@@ -305,6 +359,13 @@ def save_my_dilo(
 			"order_amount_received": sc.clean_amount(order_amount_received, "order_amount_received"),
 			"payments_received": sc.clean_amount(payments_received, "payments_received"),
 			"remarks": sc.clean_remarks(remarks),
+			"plan_new_visits": sc.clean_count(plan_new_visits, "plan_new_visits", sc.MAX_DILO_COUNT),
+			"plan_followup_visits": sc.clean_count(plan_followup_visits, "plan_followup_visits", sc.MAX_DILO_COUNT),
+			"new_visits_received": sc.clean_count(new_visits_received, "new_visits_received", sc.MAX_DILO_COUNT),
+			"followup_visits_received": sc.clean_count(followup_visits_received, "followup_visits_received", sc.MAX_DILO_COUNT),
+		}
+		reported = {  # key sent -> a count, or None = clear (typed nothing)
+			key: sc.clean_count(ignored[key], key, sc.MAX_DILO_COUNT) for key in sc.REPORTED_FIELDS if key in ignored
 		}
 		extra_plan = {
 			"opportunities_expected": opportunities_expected,
@@ -321,13 +382,17 @@ def save_my_dilo(
 	values = {k: v for k, v in values.items() if v is not None}
 	if not sc.extras_ready():  # the Opportunity / Quotation fields are not on the doctypes yet: ignore those keys
 		values = {k: v for k, v in values.items() if k not in sc.EXTRA_PLAN_FIELDS}
+	if not sc.visits_ready():  # same for the visit fields
+		values = {k: v for k, v in values.items() if k not in sc.VISIT_PLAN_FIELDS + sc.VISIT_EOD_FIELDS}
+	if not sc.reported_ready():  # and the rep-owned call counts
+		reported = {}
 	if off_day is not None:
 		values["off_day"] = 1 if _truthy(off_day) else 0
 
 	submit = _truthy(submit_eod) and sc.submit_ready()  # ignored until the tick exists on the day rows
 	lock = sc.locks(now_datetime(), the_date, _cutoff())
 	locked = [
-		k for k in values
+		k for k in [*values, *reported]
 		if (k in sc.SOD_FIELDS and not lock["plan_editable"]) or (k in sc.EOD_FIELDS and not lock["eod_editable"])
 	]
 	if submit and not lock["eod_editable"]:
@@ -345,17 +410,26 @@ def save_my_dilo(
 
 	already_submitted = False
 	if sc.submit_ready():
-		stored = frappe.db.get_value(sc.CHILD, row, ["eod_submitted", *sc.EOD_FIGURE_FIELDS], as_dict=True)
+		meta = frappe.get_meta(sc.CHILD)
+		stored_fields = ["eod_submitted"] + [
+			f for f in (*sc.EOD_FIGURE_FIELDS, "new_calls_reported_set", "followup_calls_reported_set") if meta.has_field(f)
+		]
+		stored = frappe.db.get_value(sc.CHILD, row, stored_fields, as_dict=True)
 		already_submitted = bool(cint(stored.eod_submitted))
-		conflicts = sc.eod_submit_conflicts(already_submitted, values, stored)
+		stored_view = dict(stored)
+		for key in sc.REPORTED_FIELDS:  # the rep's number only counts while its flag is on; otherwise "typed nothing"
+			if key in stored_view and not cint(stored_view.get(f"{key}_set")):
+				stored_view[key] = None
+		conflicts = sc.eod_submit_conflicts(already_submitted, {**values, **reported}, stored_view)
 		if conflicts:
 			return _respond(
 				403, "locked", "End of day already submitted.", locked_fields=conflicts, reason="End of day already submitted"
 			)
 		if already_submitted:  # a repeat of the same figures (app retry): nothing to write
 			values = {k: v for k, v in values.items() if k not in sc.EOD_FIGURE_FIELDS}
+			reported = {}
 
-	if values or (submit and not already_submitted):
+	if values or reported or (submit and not already_submitted):
 		now = now_datetime()
 		write = {}
 		for key, value in values.items():
@@ -365,7 +439,10 @@ def save_my_dilo(
 				write[sc.ROW_FIELD.get(key, key)] = value
 		if any(k in sc.SOD_FIELDS for k in values):
 			write["plan_saved_at"] = now
-		if any(k in ("orders_received", "order_amount_received", "payments_received", "remarks") for k in values):
+		for key, value in reported.items():  # a typed number sets the flag; null clears both (back to the system count)
+			write[key] = 0 if value is None else value
+			write[f"{key}_set"] = 0 if value is None else 1
+		if any(k in sc.EOD_STAMP_FIELDS for k in [*values, *reported]):
 			write["eod_saved_at"] = now
 		if submit and not already_submitted:
 			write["eod_submitted"] = 1

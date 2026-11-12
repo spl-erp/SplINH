@@ -348,11 +348,162 @@ class TestLockGroups(unittest.TestCase):
 		self.assertEqual(
 			set(sc.SOD_FIELDS),
 			{"plan_new_calls", "plan_followup_calls", "orders_expected", "order_amount_expected", "payments_expected",
-				"opportunities_expected", "opportunity_amount_expected", "quotations_expected", "quotation_amount_expected"},
+				"opportunities_expected", "opportunity_amount_expected", "quotations_expected", "quotation_amount_expected",
+				"plan_new_visits", "plan_followup_visits"},
 		)
-		self.assertEqual(set(sc.EOD_FIELDS), {"orders_received", "order_amount_received", "payments_received", "remarks", "off_day"})
+		self.assertEqual(
+			set(sc.EOD_FIELDS),
+			{"orders_received", "order_amount_received", "payments_received", "remarks", "off_day",
+				"new_visits_received", "followup_visits_received", "new_calls_reported", "followup_calls_reported"},
+		)
 		self.assertEqual(sc.ROW_FIELD, {"plan_new_calls": "plan_new", "plan_followup_calls": "plan_followup"})
 		self.assertFalse(set(sc.SOD_FIELDS) & set(sc.EOD_FIELDS))
+
+
+class TestRepOwnedCalls(unittest.TestCase):
+	"""The rep's own call count (app 1.7.0): the system count is kept, the rep's number wins when typed."""
+
+	def run_rules(self, rows):
+		p = parent()
+		sc.apply_rules(p, rows, TODAY)
+		return p
+
+	def test_effective_count(self):
+		r = row(24, actual_new=10, actual_followup=7)
+		self.assertEqual((sc.effective_calls(r, "new"), sc.effective_calls(r, "followup")), (10, 7))  # nothing typed
+		r = row(24, actual_new=10, new_calls_reported=12, new_calls_reported_set=1)
+		self.assertEqual(sc.effective_calls(r, "new"), 12)  # overwritten up
+		r = row(24, actual_new=10, new_calls_reported=4, new_calls_reported_set=1)
+		self.assertEqual(sc.effective_calls(r, "new"), 4)  # and down
+		r = row(24, actual_new=10, new_calls_reported=0, new_calls_reported_set=1)
+		self.assertEqual(sc.effective_calls(r, "new"), 0)  # a typed 0 is a real 0
+		r = row(24, actual_new=10, new_calls_reported=9, new_calls_reported_set=0)
+		self.assertEqual(sc.effective_calls(r, "new"), 10)  # flag off: the stored number is ignored
+
+	def test_ach_and_final_use_the_rep_number_system_actual_is_untouched(self):
+		r = planned(24, plan_new=10, plan_followup=10, actual_new=5, actual_followup=5,
+			new_calls_reported=8, new_calls_reported_set=1)
+		self.run_rules([r])
+		self.assertEqual((r["ach_new"], r["ach_followup"]), (80.0, 50.0))
+		self.assertEqual((r["new_calls_final"], r["followup_calls_final"]), (8, 5))
+		self.assertEqual((r["actual_new"], r["actual_followup"]), (5, 5))
+
+	def test_month_totals_keep_both_numbers(self):
+		rows = [
+			planned(23, plan_new=10, actual_new=6),
+			planned(24, plan_new=10, actual_new=5, new_calls_reported=9, new_calls_reported_set=1),
+			row(22, actual_new=4, new_calls_reported=1, new_calls_reported_set=1),  # no plan: counts in the totals, not in Ach
+		]
+		p = self.run_rules(rows)
+		self.assertEqual(p["new_calls_actual_total"], 15)  # system: 6 + 5 + 4
+		self.assertEqual(p["new_calls_final_total"], 16)  # final: 6 + 9 + 1
+		self.assertEqual(p["new_calls_ach"], 75.0)  # (6 + 9) / 20 on the days with a plan
+
+	def test_off_day_calls_still_count_but_the_day_is_out_of_the_plan(self):
+		r = planned(24, plan_new=10, actual_new=3, new_calls_reported=6, new_calls_reported_set=1, no_target=1)
+		p = self.run_rules([r])
+		self.assertIsNone(r["ach_new"])
+		self.assertEqual((p["new_calls_plan_total"], p["new_calls_final_total"], p["new_calls_actual_total"]), (0, 6, 3))
+
+	def test_rows_without_the_new_fields_behave_as_before(self):
+		r = planned(24, plan_new=10, actual_new=5)  # no reported keys at all (fields not added yet)
+		p = self.run_rules([r])
+		self.assertEqual((r["ach_new"], p["new_calls_actual_total"], p["new_calls_final_total"]), (50.0, 5, 5))
+
+	def test_rerun_is_stable(self):
+		rows = [planned(24, plan_new=10, actual_new=5, new_calls_reported=8, new_calls_reported_set=1)]
+		first = dict(self.run_rules(rows))
+		self.assertEqual(self.run_rules(rows), first)
+
+
+class TestVisits(unittest.TestCase):
+	def test_month_totals_only_planned_days_up_to_today(self):
+		rows = [
+			planned(22, plan_new_visits=4, plan_followup_visits=6, new_visits_received=3, followup_visits_received=2),
+			planned(23, plan_new_visits=1, plan_followup_visits=1, new_visits_received=5, followup_visits_received=0),
+			row(21, new_visits_received=9, followup_visits_received=9),  # no plan: left out, like orders
+			planned(24, plan_new_visits=9, new_visits_received=9, no_target=1),  # off day: left out
+			planned(25, plan_new_visits=7, new_visits_received=7),  # after today
+		]
+		self.assertEqual(
+			sc.month_visit_totals(rows, TODAY),
+			{"new": {"expected": 5, "received": 8}, "followup": {"expected": 7, "received": 2}},
+		)
+
+	def test_empty(self):
+		self.assertEqual(
+			sc.month_visit_totals([], TODAY), {"new": {"expected": 0, "received": 0}, "followup": {"expected": 0, "received": 0}}
+		)
+
+	def test_visit_plan_is_in_the_plan_group_visits_received_in_the_end_of_day_group(self):
+		for k in ("plan_new_visits", "plan_followup_visits"):
+			self.assertIn(k, sc.SOD_FIELDS)
+			self.assertNotIn(k, sc.EOD_FIELDS)
+		for k in ("new_visits_received", "followup_visits_received", "new_calls_reported", "followup_calls_reported"):
+			self.assertIn(k, sc.EOD_FIELDS)
+			self.assertIn(k, sc.EOD_FIGURE_FIELDS)  # a submitted day freezes them
+			self.assertIn(k, sc.EOD_STAMP_FIELDS)
+
+	def test_limits(self):
+		for good in (0, 1, "7", 9999, 9999.0):
+			self.assertIsInstance(sc.clean_count(good, "plan_new_visits", sc.MAX_DILO_COUNT), int)
+		self.assertIsNone(sc.clean_count(None, "x", sc.MAX_DILO_COUNT))
+		for bad in (10000, -1, 1.5, True, "abc", float("nan")):
+			with self.assertRaises(sc.InvalidDilo, msg=repr(bad)):
+				sc.clean_count(bad, "plan_new_visits", sc.MAX_DILO_COUNT)
+		self.assertEqual(sc.clean_count(10**6, "orders_received"), 10**6)  # the old ceiling is unchanged elsewhere
+
+	def test_visits_never_change_the_calls_ach(self):
+		r = planned(24, plan_new=10, actual_new=5, plan_new_visits=3, new_visits_received=1)
+		p = parent()
+		sc.apply_rules(p, [r], TODAY)
+		self.assertEqual(r["ach_new"], 50.0)
+		self.assertNotIn("new_visits_ach", r)
+
+
+class TestOffDay(unittest.TestCase):
+	def test_off_day_with_a_saved_plan_leaves_the_day_out_and_undo_brings_it_back(self):
+		r = planned(24, plan_new=10, plan_followup=8, orders_expected=2, actual_new=4, no_target=1)
+		p = parent()
+		sc.apply_rules(p, [r], TODAY)
+		self.assertFalse(sc.has_plan(r))
+		self.assertEqual((p["new_calls_plan_total"], p["orders_expected_total"], p["new_calls_actual_total"]), (0, 0, 4))
+		self.assertIsNone(r["ach_new"])
+		r["no_target"] = 0  # Undo off day: the stored plan is still there
+		sc.apply_rules(p, [r], TODAY)
+		self.assertTrue(sc.has_plan(r))
+		self.assertEqual((p["new_calls_plan_total"], r["ach_new"]), (10, 40.0))
+
+	def test_off_day_is_in_the_end_of_day_group_so_the_plan_cutoff_never_blocks_it(self):
+		self.assertIn("off_day", sc.EOD_FIELDS)
+		self.assertNotIn("off_day", sc.SOD_FIELDS)
+		self.assertNotIn("off_day", sc.EOD_FIGURE_FIELDS)  # and a submitted day does not freeze it
+		after_cutoff = datetime.datetime(2026, 10, 24, 18, 0)
+		lock = sc.locks(after_cutoff, TODAY, datetime.time(12, 0))
+		self.assertFalse(lock["plan_editable"])
+		self.assertTrue(lock["eod_editable"])
+		past = sc.locks(after_cutoff, D(2026, 10, 23), datetime.time(12, 0))
+		self.assertFalse(past["eod_editable"])  # a past day is refused
+
+
+class TestSubmitLockWithNewFields(unittest.TestCase):
+	def test_reported_none_means_typed_nothing(self):
+		stored = {"new_calls_reported": None}
+		self.assertEqual(sc.eod_submit_conflicts(True, {"new_calls_reported": None}, stored), [])  # a repeat
+		self.assertEqual(sc.eod_submit_conflicts(True, {"new_calls_reported": 0}, stored), ["new_calls_reported"])
+		self.assertEqual(sc.eod_submit_conflicts(True, {"new_calls_reported": 5}, stored), ["new_calls_reported"])
+
+	def test_reported_number_repeat_and_change(self):
+		stored = {"followup_calls_reported": 12}
+		self.assertEqual(sc.eod_submit_conflicts(True, {"followup_calls_reported": 12}, stored), [])
+		self.assertEqual(sc.eod_submit_conflicts(True, {"followup_calls_reported": 11}, stored), ["followup_calls_reported"])
+		self.assertEqual(sc.eod_submit_conflicts(True, {"followup_calls_reported": None}, stored), ["followup_calls_reported"])
+
+	def test_visits_received_freeze_on_submit_the_visit_plan_does_not(self):
+		stored = {"new_visits_received": 3}
+		self.assertEqual(sc.eod_submit_conflicts(True, {"new_visits_received": 4}, stored), ["new_visits_received"])
+		self.assertEqual(sc.eod_submit_conflicts(True, {"plan_new_visits": 9}, stored), [])
+		self.assertEqual(sc.eod_submit_conflicts(False, {"new_visits_received": 4}, stored), [])
 
 
 if __name__ == "__main__":

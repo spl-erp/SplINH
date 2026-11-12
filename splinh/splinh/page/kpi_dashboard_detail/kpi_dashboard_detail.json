@@ -1,8 +1,11 @@
 {
  "content": null,
+ "creation": "2026-11-06 16:11:43.620214",
  "docstatus": 0,
  "doctype": "Page",
  "idx": 0,
+ "modified": "2026-11-06 16:12:30.831297",
+ "modified_by": "Administrator",
  "module": "SplINH",
  "name": "kpi-dashboard-detail",
  "owner": "Administrator",
