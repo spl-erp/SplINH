@@ -17,6 +17,7 @@ To re-apply manually:
 """
 
 import json
+import os
 
 import frappe
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
@@ -103,6 +104,7 @@ def execute():
 		_ensure_user_inh_fields,
 		ensure_scorecard_schema,
 		_ensure_lead_duplicate_check,
+		_ensure_lead_merge,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
 		ensure_call_monitoring_detailed_page,
@@ -3224,6 +3226,19 @@ def _ensure_lead_duplicate_check():
 		LEAD_DUPLICATE_CHECK_SCRIPT,
 		{"dt": "Lead", "view": "List", "enabled": 1, "script": LEAD_DUPLICATE_CHECK_JS},
 	)
+
+
+# "Merge Leads" in the Actions menu of the Lead list (2026-11-05): the dialog lives in
+# custom/lead_merge_list.js (its own file so it is easy to read and to syntax-check), the server side in
+# api/lead_merge.py + custom/lead_merge.py. Like the Duplicate Check above it WRAPS the existing onload.
+LEAD_MERGE_SCRIPT = "Lead List Merge Leads"
+
+
+def _ensure_lead_merge():
+	path = os.path.join(os.path.dirname(__file__), "lead_merge_list.js")
+	with open(path, encoding="utf-8") as f:
+		script = f.read()
+	_upsert("Client Script", LEAD_MERGE_SCRIPT, {"dt": "Lead", "view": "List", "enabled": 1, "script": script})
 
 
 # ------------------------------------------------------- Call Monitoring dashboard
