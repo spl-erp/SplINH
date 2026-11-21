@@ -270,3 +270,113 @@ class TestSuggestMain(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+class TestMergeKeepsWhatFrappeDoesNotMove(unittest.TestCase):
+	def test_rename_args_with_and_without_the_method_name(self):
+		self.assertEqual(m.rename_args(("A", "B", True)), ("A", "B", True))
+		self.assertEqual(m.rename_args(("after_rename", "A", "B", False)), ("A", "B", False))
+		self.assertEqual(m.rename_args(("before_rename", "A", "B", 1)), ("A", "B", True))
+		for args in ((), ("A",), ("after_rename", "A"), ("", "B"), None):
+			self.assertIsNone(m.rename_args(args))
+
+	def test_member_plan(self):
+		self.assertEqual(m.member_plan([{"name": "r1", "party": "L1"}, {"name": "r2", "party": "L9"}], "L1", "L2"), (["r1"], []))
+		self.assertEqual(m.member_plan([{"name": "r1", "party": "L1"}, {"name": "r2", "party": "L2"}], "L1", "L2"), ([], ["r1"]))
+		self.assertEqual(m.member_plan([{"name": "r2", "party": "L2"}], "L1", "L2"), ([], []))
+		self.assertEqual(m.member_plan([{"name": "r1", "party": "L1"}, {"name": "r3", "party": "L1"}], "L1", "L2"), (["r1"], ["r3"]))
+
+	def test_todo_note_keeps_every_text_and_escapes_it(self):
+		text = m.todo_note("CRM-LEAD-1", [{"description": "Call <b>Asha</b> back", "allocated_to": "a@x.com", "status": "Open", "date": "2026-11-20"}, {"description": "", "status": "Open"}])
+		self.assertIn("CRM-LEAD-1", text)
+		self.assertIn("Call &lt;b&gt;Asha&lt;/b&gt; back", text)
+		self.assertNotIn("<b>Asha</b>", text)
+		self.assertIn("a@x.com, Open, 2026-11-20", text)
+		self.assertIn("(no text)", text)
+		self.assertEqual(text.count("<li>"), 2)
+
+	def test_hooks_and_module_are_wired_and_safe(self):
+		import os
+
+		base = os.path.join(os.path.dirname(__file__), "..")
+		hooks = open(os.path.join(base, "hooks.py"), encoding="utf-8").read()
+		self.assertIn('"before_rename": "splinh.custom.lead_merge_links.before_rename"', hooks)
+		self.assertIn('"after_rename": "splinh.custom.lead_merge_links.after_rename"', hooks)
+		src = open(os.path.join(base, "custom", "lead_merge_links.py"), encoding="utf-8").read()
+		self.assertEqual(src.count("frappe.log_error("), 2)  # a failure is logged, never raised into the merge
+		self.assertNotIn("frappe.throw", src)
+		self.assertIn('frappe.db.table_exists("Waba Conversation")', src)  # production may not have Waba: every Waba step is guarded
+
+
+class TestSimilarLeads(unittest.TestCase):
+	def test_the_lead_itself_is_never_listed(self):
+		self.assertEqual(m.similar_leads("L1", ["L1", "L2"], ["L1"], ["L1"]), [{"name": "L2", "matched_on": ["phone"]}])
+
+	def test_a_lead_found_for_several_reasons_is_listed_once_and_first(self):
+		out = m.similar_leads("L1", ["L2", "L3"], ["L3"], ["L4", "L3"])
+		self.assertEqual([x["name"] for x in out], ["L3", "L2", "L4"])
+		self.assertEqual(out[0]["matched_on"], ["phone", "email", "company"])
+		self.assertEqual(out[2]["matched_on"], ["company"])
+
+	def test_equal_matches_keep_the_order_found_and_the_list_is_capped(self):
+		names = [f"L{i}" for i in range(2, 30)]
+		out = m.similar_leads("L1", names, [], [], limit=10)
+		self.assertEqual([x["name"] for x in out], names[:10])
+
+	def test_nothing_found(self):
+		self.assertEqual(m.similar_leads("L1", [], None, [""]), [])
+
+
+class TestMergeFromOtherPlaces(unittest.TestCase):
+	def setUp(self):
+		import os
+
+		self.base = os.path.join(os.path.dirname(__file__), "..")
+		self.read = lambda *p: open(os.path.join(self.base, *p), encoding="utf-8").read()
+
+	def test_scripts_parse(self):
+		import shutil
+		import subprocess
+
+		node = shutil.which("node")
+		if not node:
+			self.skipTest("node is not installed")
+		for name in ("lead_merge_list.js", "lead_merge_form.js"):
+			result = subprocess.run([node, "--check", f"{self.base}/custom/{name}"], capture_output=True, text=True)
+			self.assertEqual(result.returncode, 0, result.stderr)
+
+	def test_the_dialog_is_one_shared_entry_point(self):
+		js = self.read("custom", "lead_merge_list.js")
+		self.assertIn("window.splinh_lead_merge", js)
+		self.assertIn("function open_names(names, opts)", js)
+		self.assertIn("opts.main && preview.names.includes(opts.main)", js)  # the Lead form suggests itself as the main Lead
+		self.assertIn("splinh.api.lead_merge.get_merge_preview", js)
+
+	def test_the_banner_uses_the_real_api_and_escapes_what_it_shows(self):
+		js = self.read("custom", "lead_merge_form.js")
+		self.assertIn("splinh.api.lead_duplicates.similar_leads", js)
+		self.assertIn("window.splinh_lead_merge.open(names, {main: frm.doc.name})", js)
+		self.assertIn("esc(m.title)", js)
+		self.assertIn("frm.is_dirty()", js)  # never merges unsaved edits
+		self.assertIn("!frm.perm[0].write", js)  # only for people who can edit the Lead
+
+	def test_the_api_is_read_only_and_checks_permissions(self):
+		src = self.read("api", "lead_duplicates.py")
+		self.assertIn('frappe.has_permission("Lead", "read", doc=lead, throw=True)', src)
+		self.assertIn('frappe.has_permission("Lead", "read", doc=item["name"])', src)  # SFA visibility per Lead
+		self.assertIn("tabDuplicate Index", src)  # company names go through the guard's index: Lead.company_name is not indexed
+		self.assertNotIn("lower(trim(company_name))", src)
+		for word in (".insert(", ".save(", "db.set_value", "db.delete", "frappe.delete_doc"):
+			self.assertNotIn(word, src)
+
+	def test_duplicate_check_offers_merge_only_for_two_or_more_leads_and_only_when_the_dialog_exists(self):
+		setup = self.read("custom", "splinh_setup.py")
+		self.assertIn('lead_names.length >= 2 && window.splinh_lead_merge', setup)
+		self.assertIn('m.doctype === "Lead"', setup)
+		self.assertIn(".slice(0, 4)", setup)
+
+	def test_both_client_scripts_are_created_from_the_same_dialog(self):
+		setup = self.read("custom", "splinh_setup.py")
+		self.assertIn('LEAD_MERGE_FORM_SCRIPT = "Lead Form Merge Leads"', setup)
+		self.assertIn('"view": "Form", "enabled": 1, "script": dialog +', setup)
+		self.assertIn('"view": "List", "enabled": 1, "script": dialog}', setup)

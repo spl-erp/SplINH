@@ -105,6 +105,7 @@ def execute():
 		ensure_scorecard_schema,
 		_ensure_lead_duplicate_check,
 		_ensure_lead_merge,
+		_ensure_contact_merge,
 		ensure_call_monitoring_dashboard,
 		ensure_call_monitoring_insights,
 		ensure_call_monitoring_detailed_page,
@@ -2009,7 +2010,7 @@ CALL_TRACKING_FIELDS = [
 		"fieldname": "custom_source",
 		"label": "Source",
 		"fieldtype": "Select",
-		"options": "\nSIM\nWhatsApp",
+		"options": "\nSIM\nWhatsApp\nWhatsApp API",
 		"insert_after": "custom_lead",
 		"reqd": 1,
 		"in_list_view": 1,
@@ -2332,7 +2333,7 @@ def _ensure_call_tracking_source():
 	# completely different mechanism - see the options fix on the field
 	# definition above (CALL_TRACKING_FIELDS) and _set_custom_field_props call
 	# below, which corrects it in place on this already-deployed field.
-	_set_custom_field_props("Call Log", "custom_source", {"options": "\nSIM\nWhatsApp"})
+	_set_custom_field_props("Call Log", "custom_source", {"options": "\nSIM\nWhatsApp\nWhatsApp API"})
 
 
 # WhatsApp "Unknown" status -> "Missed" LABEL (2026-09-25, product decision).
@@ -3199,6 +3200,11 @@ LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits he
 				</tr>`;
 			}
 			html += "</tbody></table>";
+			const lead_names = res.matches.filter((m) => m.doctype === "Lead").map((m) => m.name);
+			if (lead_names.length >= 2 && window.splinh_lead_merge) {
+				const extra = lead_names.length > 4 ? ` &middot; ${esc(__("{0} more: merge again afterwards", [lead_names.length - 4]))}` : "";
+				html += `<button class="btn btn-warning btn-sm splinh-merge-leads">${esc(__("Merge these Leads"))}</button><span class="text-muted small">${extra}</span>`;
+			}
 		} else {
 			html += scope;
 			html += `<div class="text-success mb-2"><b>${esc(__("No existing Lead, Customer or Contact found."))}</b></div>
@@ -3206,6 +3212,11 @@ LEAD_DUPLICATE_CHECK_JS = """// Managed by splinh.custom.splinh_setup - edits he
 		}
 
 		$result.html(html);
+		$result.find(".splinh-merge-leads").on("click", () => {
+			const names = (res.matches || []).filter((m) => m.doctype === "Lead").map((m) => m.name).slice(0, 4);
+			dialog.hide();
+			window.splinh_lead_merge.open(names, {});
+		});
 		$result.find(".splinh-create-lead").on("click", () => {
 			dialog.hide();
 			const prefill = {};
@@ -3234,11 +3245,38 @@ def _ensure_lead_duplicate_check():
 LEAD_MERGE_SCRIPT = "Lead List Merge Leads"
 
 
+LEAD_MERGE_FORM_SCRIPT = "Lead Form Merge Leads"
+
+
 def _ensure_lead_merge():
-	path = os.path.join(os.path.dirname(__file__), "lead_merge_list.js")
-	with open(path, encoding="utf-8") as f:
-		script = f.read()
-	_upsert("Client Script", LEAD_MERGE_SCRIPT, {"dt": "Lead", "view": "List", "enabled": 1, "script": script})
+	"""Two Client Scripts from one dialog file: the List one (Actions > Merge Leads) and the Form one, which carries the same
+	dialog plus the "possible duplicates" banner (custom/lead_merge_form.js), so Merge also works from a Lead opened directly."""
+	here = os.path.dirname(__file__)
+	with open(os.path.join(here, "lead_merge_list.js"), encoding="utf-8") as f:
+		dialog = f.read()
+	with open(os.path.join(here, "lead_merge_form.js"), encoding="utf-8") as f:
+		banner = f.read()
+	_upsert("Client Script", LEAD_MERGE_SCRIPT, {"dt": "Lead", "view": "List", "enabled": 1, "script": dialog})
+	_upsert("Client Script", LEAD_MERGE_FORM_SCRIPT, {"dt": "Lead", "view": "Form", "enabled": 1, "script": dialog + "\n" + banner})
+
+
+# "Merge Contacts" in the Actions menu of the Contact list and the "Similar Contacts" banner on the Contact form (2026-11-19): the dialog
+# lives in custom/contact_merge_list.js, the banner in custom/contact_merge_form.js, the server side in api/contact_merge.py +
+# custom/contact_merge.py. Like Lead Merge it WRAPS the existing onload.
+CONTACT_MERGE_SCRIPT = "Contact List Merge Contacts"
+CONTACT_MERGE_FORM_SCRIPT = "Contact Form Merge Contacts"
+
+
+def _ensure_contact_merge():
+	"""Two Client Scripts from one dialog file: the List one (Actions > Merge Contacts) and the Form one, which carries the same dialog plus
+	the "Similar Contacts" banner, so Merge also works from a Contact opened directly."""
+	here = os.path.dirname(__file__)
+	with open(os.path.join(here, "contact_merge_list.js"), encoding="utf-8") as f:
+		dialog = f.read()
+	with open(os.path.join(here, "contact_merge_form.js"), encoding="utf-8") as f:
+		banner = f.read()
+	_upsert("Client Script", CONTACT_MERGE_SCRIPT, {"dt": "Contact", "view": "List", "enabled": 1, "script": dialog})
+	_upsert("Client Script", CONTACT_MERGE_FORM_SCRIPT, {"dt": "Contact", "view": "Form", "enabled": 1, "script": dialog + "\n" + banner})
 
 
 # ------------------------------------------------------- Call Monitoring dashboard
@@ -3300,7 +3338,7 @@ CALL_MONITORING_NATIVE_CARDS = [
 	("Missed calls", [["Call Log", "status", "in", CALL_MONITORING_MISSED_STATUSES]]),
 	("Outgoing calls", [["Call Log", "type", "=", "Outgoing"]]),
 	("Incoming calls", [["Call Log", "type", "=", "Incoming"]]),
-	("WhatsApp calls", [["Call Log", "custom_source", "=", "WhatsApp"]]),
+	("WhatsApp calls", [["Call Log", "custom_source", "in", ["WhatsApp", "WhatsApp API"]]]),
 	("Phone (SIM) calls", [["Call Log", "custom_source", "=", "SIM"]]),
 ]
 
@@ -3954,7 +3992,7 @@ def _ensure_kpi_dashboard_cards():
 	native_cards = [
 		("Lead Generation", "Lead", "creation", []),
 		("Lead Qualification", "Lead", "custom_lead_score_updated_on", []),
-		("WhatsApp Calling", "Call Log", "start_time", [["Call Log", "custom_source", "=", "WhatsApp"]]),
+		("WhatsApp Calling", "Call Log", "start_time", [["Call Log", "custom_source", "in", ["WhatsApp", "WhatsApp API"]]]),
 	]
 	for suffix, doctype, date_field, extra_conditions in native_cards:
 		label = f"KPI - {suffix}"

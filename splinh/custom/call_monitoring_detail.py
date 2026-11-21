@@ -196,7 +196,10 @@ def _build_conditions(filters):
 		values.append(employee)
 
 	source = filters.get("source")
-	if source in ("SIM", "WhatsApp"):
+	if source == "WhatsApp":
+		# The "WhatsApp" choice covers both the phone-detected calls and the Business API calls (Waba).
+		conditions.append("custom_source IN ('WhatsApp', 'WhatsApp API')")
+	elif source in ("SIM", "WhatsApp API"):
 		conditions.append("custom_source = %s")
 		values.append(source)
 
@@ -267,7 +270,7 @@ def get_dashboard_data(filters=None, start=0, page_length=DEFAULT_PAGE_LENGTH):
 				THEN 1 ELSE 0 END) AS outgoing_calls,
 			SUM(CASE WHEN type = 'Incoming' AND status NOT IN ({_MISSED_STATUS_SQL_LIST})
 				THEN 1 ELSE 0 END) AS incoming_calls,
-			SUM(CASE WHEN custom_source = 'WhatsApp' THEN 1 ELSE 0 END) AS whatsapp_calls,
+			SUM(CASE WHEN custom_source IN ('WhatsApp', 'WhatsApp API') THEN 1 ELSE 0 END) AS whatsapp_calls,
 			SUM(CASE WHEN custom_source = 'SIM' THEN 1 ELSE 0 END) AS phone_calls
 		FROM `tabCall Log`
 		WHERE {company_where_clause}""",
@@ -421,7 +424,9 @@ def _filter_rows_get_list(filters, start, page_length):
 	if employee:
 		and_filters.append(["Call Log", "call_received_by", "=", employee])
 	source = filters.get("source")
-	if source in ("SIM", "WhatsApp"):
+	if source == "WhatsApp":
+		and_filters.append(["Call Log", "custom_source", "in", ["WhatsApp", "WhatsApp API"]])
+	elif source in ("SIM", "WhatsApp API"):
 		and_filters.append(["Call Log", "custom_source", "=", source])
 	direction = filters.get("direction")
 	if direction in ("Incoming", "Outgoing", "Unknown"):

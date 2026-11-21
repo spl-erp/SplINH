@@ -219,7 +219,7 @@ def _build_kpi_workbook():
 			"type": "mutate",
 			"new_name": "is_whatsapp",
 			"data_type": "Integer",
-			"expression": {"type": "expression", "expression": "one_if(custom_source == 'WhatsApp')"},
+			"expression": {"type": "expression", "expression": "one_if((custom_source == 'WhatsApp') | (custom_source == 'WhatsApp API'))"},
 		},
 	]
 	calls_query = _new_query_doc(workbook_name, "Call Log", calls_ops)

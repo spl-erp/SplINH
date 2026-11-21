@@ -286,7 +286,7 @@ def _call_data(employee, start, end):
 		else:
 			agg.followup += 1
 			totals["followup"] += 1
-		if r.source == "WhatsApp":
+		if r.source in ("WhatsApp", "WhatsApp API"):
 			agg.whatsapp += 1
 			totals["whatsapp"] += 1
 	return list(by_key.values()), totals

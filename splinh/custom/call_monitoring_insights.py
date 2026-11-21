@@ -222,7 +222,7 @@ def _build_call_monitoring_workbook():
 				{"measure_name": "Missed Calls", "column_name": "is_missed_call", "data_type": "Integer", "aggregation": "sum"},
 				_expr_measure("Outgoing Calls", "count_if(type == 'Outgoing')"),
 				_expr_measure("Incoming Calls", "count_if(type == 'Incoming')"),
-				_expr_measure("WhatsApp Calls", "count_if(custom_source == 'WhatsApp')"),
+				_expr_measure("WhatsApp Calls", "count_if((custom_source == 'WhatsApp') | (custom_source == 'WhatsApp API'))"),
 				_expr_measure("Phone (SIM) Calls", "count_if(custom_source == 'SIM')"),
 			],
 			"number_formats": {},

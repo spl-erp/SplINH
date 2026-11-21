@@ -18,10 +18,17 @@ doc_events = {
 	"Contact": {
 		"on_update": "splinh.custom.phone_lookup.sync_document",
 		"on_trash": "splinh.custom.phone_lookup.delete_document",
+		# Contact Merge: keep tasks' text, the Waba WhatsApp records and the phone index right when a Contact is merged into another or
+		# renamed (custom/contact_merge_links.py)
+		"before_rename": "splinh.custom.contact_merge_links.before_rename",
+		"after_rename": "splinh.custom.contact_merge_links.after_rename",
 	},
 	"Lead": {
 		"on_update": "splinh.custom.phone_lookup.sync_document",
 		"on_trash": "splinh.custom.phone_lookup.delete_document",
+		# Lead Merge: keep tasks' text and the Waba WhatsApp records when a Lead is merged into another (custom/lead_merge_links.py)
+		"before_rename": "splinh.custom.lead_merge_links.before_rename",
+		"after_rename": "splinh.custom.lead_merge_links.after_rename",
 	},
 	# Manager-review fields - see custom/call_log_manager_review.py and
 	# _ensure_call_manager_review_fields() in custom/splinh_setup.py.
@@ -84,3 +91,6 @@ waba_party_all = ["splinh.waba_bridge.match_all_parties"]
 waba_record_owner = ["splinh.waba_bridge.record_owner"]
 # ...and whether the record already says "do not contact" (Unsubscribed / Do Not Disturb), which blocks WhatsApp templates too.
 waba_opt_out = ["splinh.waba_bridge.opt_out"]
+# ...and a WhatsApp voice call that has ended (or whose recording arrived): becomes an ERP Call Log, source "WhatsApp API".
+waba_call_ended = ["splinh.waba_bridge.call_ended"]
+waba_call_push = ["splinh.custom.fcm_push.push_call_event"]

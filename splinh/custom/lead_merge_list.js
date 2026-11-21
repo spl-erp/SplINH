@@ -3,6 +3,9 @@
 // field, which Lead's value goes into it (or append the text of the others). Server side:
 // splinh.api.lead_merge. Wraps (never replaces) the existing onload - sigzensfa's lead_list.js adds its
 // Sales Person filter there and splinh's Duplicate Check button wraps it too.
+// The dialog is also offered elsewhere through window.splinh_lead_merge.open(names, {main, listview, on_done}):
+// the Duplicate Check result (list view) and the "possible duplicates" banner on the Lead form. This file is installed
+// as both the List and the Form Client Script, so it works whichever page is opened first.
 (() => {
 	try {
 		install();
@@ -12,6 +15,9 @@
 	}
 
 	function install() {
+	// the entry point other scripts call; defined once per page
+	window.splinh_lead_merge = window.splinh_lead_merge || {open: (names, opts) => open_names(names, opts || {})};
+
 	const settings = (frappe.listview_settings["Lead"] = frappe.listview_settings["Lead"] || {});
 	if (settings.__splinh_lead_merge) return;
 	settings.__splinh_lead_merge = true;
@@ -53,7 +59,12 @@
 	}
 
 	function start(listview) {
-		const names = listview.get_checked_items(true);
+		open_names(listview.get_checked_items(true), {listview: listview});
+	}
+
+	// names: the Leads to merge (2 to 4); opts.main: the Lead to suggest as the main one; opts.listview: clear its ticks afterwards;
+	// opts.on_done(main): what to do after a merge (default: open the main Lead).
+	function open_names(names, opts) {
 		if (names.length < MIN || names.length > MAX) {
 			frappe.msgprint({
 				title: __("Merge Leads"),
@@ -69,15 +80,15 @@
 				freeze: true,
 				freeze_message: __("Comparing the Leads..."),
 			})
-			.then((r) => r.message && open_dialog(listview, r.message));
+			.then((r) => r.message && open_dialog(opts, r.message));
 	}
 
-	function open_dialog(listview, preview) {
+	function open_dialog(opts, preview) {
 		const names = preview.names;
 		const lead_by_name = {};
 		preview.leads.forEach((l) => (lead_by_name[l.name] = l));
 		const state = {
-			main: preview.suggested_main,
+			main: opts.main && preview.names.includes(opts.main) ? opts.main : preview.suggested_main,
 			use: {}, // fieldname -> lead name, only where the user left the main Lead's value
 			append: {}, // fieldname -> [lead names]
 			show_all: false,
@@ -253,8 +264,11 @@
 									message: __("The Lead's own rules changed these fields when it was saved, so they differ from your choice: {0}. (For example a Lead that has a Customer is always Converted.)", [over.join(", ")]),
 								});
 							}
-							listview.clear_checked_items && listview.clear_checked_items();
-							frappe.set_route("Form", "Lead", r.message.main);
+							opts.listview && opts.listview.clear_checked_items && opts.listview.clear_checked_items();
+							if (opts.on_done) return opts.on_done(r.message.main);
+							const open_form = window.cur_frm && cur_frm.doc && cur_frm.doc.doctype === "Lead" ? cur_frm : null;
+							if (open_form && open_form.doc.name === r.message.main) open_form.reload_doc();
+							else frappe.set_route("Form", "Lead", r.message.main);
 						});
 				},
 			);

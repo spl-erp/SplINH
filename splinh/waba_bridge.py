@@ -5,6 +5,7 @@ with the indexed Phone Lookup table, so a WhatsApp sender is matched with one po
 rule and priority the call tracker uses (Contact before Lead, then field order, then newest).
 """
 
+from splinh.custom.call_recording_pause import recording_paused_for
 from splinh.custom.phone_lookup import find_party_by_phone
 
 
@@ -63,3 +64,110 @@ def match_all_parties(phone):
 	from splinh.custom.phone_lookup import _normalize, find_all_by_key
 
 	return [{"doctype": row["doctype"], "name": row["name"]} for row in find_all_by_key(_normalize(phone))]
+
+
+# --------------------------------------------------------------------------------------------- WhatsApp voice calls (Waba Call -> Call Log)
+
+CALL_LOG_STATUS = {"Completed": "Completed", "Missed": "No Answer", "No answer": "No Answer", "Cancelled": "No Answer", "Rejected": "Busy", "Failed": "Failed"}
+
+
+def call_ended(call):
+	"""Waba says a WhatsApp voice call finished (or its recording arrived). Queued, because a Call Log insert runs the slow party match and
+	retries with rollbacks, which must never share Waba's webhook transaction. Idempotent: the Call Log is named WABA-<call id>."""
+	import frappe
+
+	if call.status in ("Ringing", "Answered"):
+		return  # not finished yet
+	frappe.enqueue(
+		"splinh.waba_bridge.create_call_log",
+		queue="short",
+		call=call.name,
+		enqueue_after_commit=True,
+		job_id=f"waba-calllog-{call.name}-{1 if call.recording_file else 0}",
+		deduplicate=True,
+	)
+
+
+def create_call_log(call):
+	"""The job: make the Call Log for a Waba Call (source "WhatsApp API", linked to the Lead / Contact / Customer by the same phone lookup the
+	call tracker uses), or attach the recording to the one that exists."""
+	import frappe
+
+	from splinh.api import call_tracking as ct
+
+	doc = frappe.get_doc("Waba Call", call)
+	name = "WABA-" + doc.call_id
+	outgoing = doc.direction == "Outgoing"
+	rep = doc.answered_by or doc.started_by or None  # nobody answered (missed / declined): stays with Administrator
+	if not frappe.db.exists("Call Log", name):
+		digits = (doc.caller_phone or "").lstrip("+")
+		phone = f"+{digits}" if digits else None  # same shape as the phone-detected WhatsApp rows
+		status = CALL_LOG_STATUS.get(doc.status, "Completed")
+		shown = _clean_name(doc.caller_name)
+		values = {
+			"doctype": "Call Log",
+			"id": name,
+			"from": None if outgoing else phone,
+			"to": phone if outgoing else None,
+			"type": "Outgoing" if outgoing else "Incoming",
+			"status": status,
+			"duration": doc.duration or 0,
+			"start_time": doc.started_at,
+			"end_time": doc.ended_at,
+			"custom_device_id": "waba-api",
+			"custom_contact_name": shown,
+			"custom_source": "WhatsApp API",
+			"custom_call_type": "Voice",
+			"custom_detector_confidence": "High",
+			"custom_call_summary": f"WhatsApp Voice · {'Outgoing to' if outgoing else 'Incoming from'} {shown or phone or 'unknown number'}" + (f" ({ct._format_duration(doc.duration)})" if status == "Completed" else f" - {status}"),
+		}
+		if rep:
+			# The Employee of the person who took the call (the insert below runs as Administrator, so it cannot find it itself).
+			from splinh.custom.call_employee import employee_for_user
+
+			employee, employee_user = employee_for_user(rep)
+			if employee:
+				values["call_received_by"] = employee
+				if employee_user:
+					values["employee_user_id"] = employee_user
+		# Insert as Administrator so a rep without the Call Tracker User role never loses the call, then hand the row to the rep.
+		ct._insert_with_retry(name, values, "Administrator", "waba-api", doc.call_id, {"waba_call": doc.name})
+		if frappe.db.exists("Call Log", name):
+			frappe.db.set_value("Waba Call", doc.name, "call_log", name, update_modified=False)
+			if rep:
+				_hand_to(name, rep)
+	if doc.recording_file and frappe.db.exists("Call Log", name):
+		if recording_paused_for(rep, doc.started_at):
+			return  # the rep had "Record Calls" paused when this call began: no audio on the Call Log (Waba keeps its own copy for managers)
+		_attach_recording(doc, name)
+
+
+def _clean_name(value):
+	"""A profile name worth showing: one with a letter or digit ('.' or a lone emoji is not a name)."""
+	value = " ".join(str(value or "").split())
+	return value if any(ch.isalnum() for ch in value) else None
+
+
+def _hand_to(call_log, user):
+	"""Make the rep the Call Log's owner (so their own list and the 'my calls' views show it) and refresh the caller name."""
+	import frappe
+
+	from splinh.custom.call_remark_sync import caller_name
+
+	frappe.db.set_value("Call Log", call_log, "owner", user, update_modified=False)
+	row = frappe.db.get_value("Call Log", call_log, ["owner", "call_received_by"], as_dict=True)
+	name = caller_name(row)
+	if name:
+		frappe.db.set_value("Call Log", call_log, "custom_caller_name", name, update_modified=False)
+
+
+def _attach_recording(doc, call_log):
+	"""A private copy of the recording on the Call Log (free playback on its form), once."""
+	import frappe
+
+	if frappe.db.exists("File", {"attached_to_doctype": "Call Log", "attached_to_name": call_log, "file_name": ["like", f"{doc.call_id}%"]}):
+		return
+	source = frappe.get_doc("File", {"file_url": doc.recording_file, "attached_to_name": doc.name})
+	frappe.get_doc(
+		{"doctype": "File", "file_name": source.file_name, "attached_to_doctype": "Call Log", "attached_to_name": call_log, "content": source.get_content(), "is_private": 1}
+	).insert(ignore_permissions=True)

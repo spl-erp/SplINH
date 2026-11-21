@@ -59,7 +59,7 @@ const CM_ENTITY_HUE = {
 	// Direction
 	Incoming: "blue", Outgoing: "orange", Unknown: "yellow",
 	// Source
-	SIM: "blue", WhatsApp: "aqua",
+	SIM: "blue", WhatsApp: "aqua", "WhatsApp API": "aqua",
 	// Status (bucketed labels - see call_monitoring_detail.py docstring)
 	Completed: "blue", "No Answer": "orange", Busy: "aqua", Missed: "red",
 	Failed: "yellow", Cancelled: "magenta", Queued: "green", Ringing: "violet",

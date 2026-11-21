@@ -5,7 +5,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-22 12:00:00.000000",
+ "modified": "2026-11-20 11:46:52.406506",
  "modified_by": "Administrator",
  "module": "SplINH",
  "owner": "Administrator",
@@ -22,7 +22,9 @@
   "section_tokens",
   "required_role",
   "max_devices_per_user",
-  "token_inactivity_days"
+  "token_inactivity_days",
+  "section_push",
+  "fcm_service_account"
  ],
  "fields": [
   {
@@ -87,6 +89,17 @@
    "fieldtype": "Int",
    "label": "Disable a token unused for (days)",
    "default": "30"
+  },
+  {
+   "fieldname": "section_push",
+   "fieldtype": "Section Break",
+   "label": "Ring push (Firebase)"
+  },
+  {
+   "fieldname": "fcm_service_account",
+   "fieldtype": "Password",
+   "label": "Firebase service-account key (JSON)",
+   "description": "Paste the whole JSON key of the Firebase project the Call Tracker app uses. Until it is filled, ring pushes are simply not sent."
   }
  ],
  "permissions": [

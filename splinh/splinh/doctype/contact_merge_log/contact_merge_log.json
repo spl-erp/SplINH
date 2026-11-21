@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "CMERGE-.#####",
+ "creation": "2026-11-19 10:00:00.000000",
+ "description": "One row per Contact merge (Contact list > Actions > Merge Contacts): who merged what, which values were chosen, and a full copy of every Contact that was merged away (fields, phone numbers, emails, party links), so a mistake can be restored by hand.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "main_contact",
+  "merged_contacts",
+  "column_break_cml1",
+  "merged_by",
+  "merged_on",
+  "section_break_cml1",
+  "changes",
+  "field_choices",
+  "link_counts",
+  "snapshot"
+ ],
+ "fields": [
+  {
+   "fieldname": "main_contact",
+   "fieldtype": "Data",
+   "label": "Main Contact",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "merged_contacts",
+   "fieldtype": "Small Text",
+   "label": "Merged Contacts (deleted)",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_cml1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "merged_by",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Merged By",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "merged_on",
+   "fieldtype": "Datetime",
+   "label": "Merged On",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "section_break_cml1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "changes",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Changes To The Main Contact (before and after)",
+   "read_only": 1,
+   "description": "Field values the main Contact had before the merge and what they became, plus child rows that were added."
+  },
+  {
+   "fieldname": "field_choices",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Choices Made In The Dialog",
+   "read_only": 1
+  },
+  {
+   "fieldname": "link_counts",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Records Moved To The Main Contact",
+   "read_only": 1,
+   "description": "Per merged-away Contact: how many records of each doctype pointed at it before the merge."
+  },
+  {
+   "fieldname": "snapshot",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Copy Of The Merged-Away Contacts (JSON)",
+   "read_only": 1,
+   "description": "The complete Contact documents, child tables included, as they were just before the merge."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-11-19 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SplINH",
+ "name": "Contact Merge Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

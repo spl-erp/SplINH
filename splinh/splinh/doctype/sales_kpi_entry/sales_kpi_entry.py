@@ -148,7 +148,7 @@ class SalesKPIEntry(Document):
 			"Call Log",
 			filters=[
 				["owner", "=", self.user],
-				["custom_source", "=", "WhatsApp"],
+				["custom_source", "in", ["WhatsApp", "WhatsApp API"]],
 				["start_time", ">=", start],
 				["start_time", "<", end],
 			],

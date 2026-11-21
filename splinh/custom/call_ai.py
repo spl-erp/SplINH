@@ -71,6 +71,7 @@ AUDIO_MIME = {
 	".ogg": ("audio/ogg",),
 	".opus": ("audio/ogg",),
 	".flac": ("audio/flac",),
+	".webm": ("audio/webm",),
 }
 
 DIARIZATION_MAX_SECONDS = 30 * 60  # documented limit when diarization is on

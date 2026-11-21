@@ -27,8 +27,10 @@ import frappe
 from splinh.custom.call_tracker_auth import (
 	SOURCE_HEADER,
 	TOKEN_DOCTYPE,
+	is_calls_path,
 	is_inbox_path,
 	is_request_allowed,
+	phone_calls_enabled,
 	phone_inbox_enabled,
 	request_api_key,
 )
@@ -36,7 +38,7 @@ from splinh.custom.call_tracker_auth import (
 PATCH_FLAG = "__splinh_call_tracker_ip_bypass__"
 
 
-def bypasses_ip_check(source, path, cmd, key, token_user, user, phone_inbox=False):
+def bypasses_ip_check(source, path, cmd, key, token_user, user, phone_inbox=False, phone_calls=False):
 	"""True when this is a Call Tracker token request of `user` that may skip the restrict_ip list.
 
 	source: value of the Frappe-Authorization-Source header; path / cmd: the request path and `?cmd=`;
@@ -45,7 +47,7 @@ def bypasses_ip_check(source, path, cmd, key, token_user, user, phone_inbox=Fals
 	inbox on the phone is switched on, so its methods count as Call Tracker methods too."""
 	return bool(
 		source == TOKEN_DOCTYPE
-		and is_request_allowed(path, cmd, phone_inbox)
+		and is_request_allowed(path, cmd, phone_inbox, phone_calls)
 		and key
 		and user
 		and token_user == user
@@ -68,6 +70,7 @@ def _is_call_tracker_request(user):
 		token_user,
 		user,
 		phone_inbox=is_inbox_path(request.path) and phone_inbox_enabled(),
+		phone_calls=is_calls_path(request.path) and phone_calls_enabled(),
 	)
 
 

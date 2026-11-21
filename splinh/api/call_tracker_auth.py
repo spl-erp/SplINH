@@ -283,3 +283,39 @@ def app_logout():
 	revoke_token(name, "logged out by the user", user, frappe.local.request_ip)
 	log_event(user, "logout", None, frappe.local.request_ip)
 	return {"status": "ok"}
+
+
+def _own_token():
+	"""The Call Tracker token this request was made with (a doc name) or None."""
+	if frappe.get_request_header(SOURCE_HEADER) != TOKEN_DOCTYPE:
+		return None
+	key = request_api_key()
+	return frappe.db.get_value(TOKEN_DOCTYPE, {"api_key": key, "enabled": 1}, "name") if key else None
+
+
+@frappe.whitelist(methods=["POST"])
+def register_push_token(push_token: str, platform: str = "android"):
+	"""The phone gives us its push (FCM) token so a WhatsApp call can ring it while the app is closed. Stored on the token of this device
+	only. Allowed only while the phone-calls switch is on (the allowlist)."""
+	name = _own_token()
+	if not name:
+		return _respond(404, "not_found", _("No active token."))
+	token = clean_text(push_token, 400)
+	if len(token) < 20:
+		return _respond(417, "invalid", _("That is not a push token."))
+	frappe.db.set_value(
+		TOKEN_DOCTYPE, name,
+		{"push_token": token, "push_platform": clean_text(platform, 20) or "android", "push_enabled": 1, "push_updated": now_datetime()},
+		update_modified=False,
+	)
+	return {"status": "ok"}
+
+
+@frappe.whitelist(methods=["POST"])
+def unregister_push_token():
+	"""The phone no longer wants ring pushes (the person switched them off)."""
+	name = _own_token()
+	if not name:
+		return _respond(404, "not_found", _("No active token."))
+	frappe.db.set_value(TOKEN_DOCTYPE, name, {"push_token": None, "push_enabled": 0}, update_modified=False)
+	return {"status": "ok"}

@@ -5,7 +5,7 @@
  "engine": "InnoDB",
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-22 12:00:00.000000",
+ "modified": "2026-11-20 11:46:52.406506",
  "modified_by": "Administrator",
  "module": "SplINH",
  "owner": "Administrator",
@@ -26,6 +26,11 @@
   "api_key",
   "api_secret",
   "password_fingerprint",
+  "section_push",
+  "push_enabled",
+  "push_platform",
+  "push_updated",
+  "push_token",
   "section_revoke",
   "revoked_on",
   "revoke_reason"
@@ -138,6 +143,37 @@
    "fieldtype": "Data",
    "label": "Revoke Reason",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_push",
+   "fieldtype": "Section Break",
+   "label": "Ring push (WhatsApp calls)"
+  },
+  {
+   "fieldname": "push_enabled",
+   "fieldtype": "Check",
+   "label": "Push enabled",
+   "default": "0",
+   "read_only": 1
+  },
+  {
+   "fieldname": "push_platform",
+   "fieldtype": "Data",
+   "label": "Platform",
+   "read_only": 1
+  },
+  {
+   "fieldname": "push_updated",
+   "fieldtype": "Datetime",
+   "label": "Push token updated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "push_token",
+   "fieldtype": "Small Text",
+   "label": "Push token",
+   "read_only": 1,
+   "hidden": 1
   }
  ],
  "permissions": [

@@ -262,3 +262,74 @@ def check_stamps(names, stamps, current):
 def suggest_main(leads):
 	"""The Lead that carries most history; the oldest on a tie. leads: [{name, creation, weight}]."""
 	return sorted(leads, key=lambda x: (-x["weight"], str(x["creation"]), x["name"]))[0]["name"]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# What the merge must also keep right outside Frappe's own link moves (custom/lead_merge_links.py applies these).
+
+
+def rename_args(args):
+	"""(old, new, merge) from the arguments Frappe passes to a rename hook (it may put the method name first), or None."""
+	items = list(args or [])
+	if items and items[0] in ("before_rename", "after_rename"):
+		items = items[1:]
+	if len(items) < 2 or not items[0] or not items[1]:
+		return None
+	return str(items[0]), str(items[1]), bool(items[2]) if len(items) > 2 else False
+
+
+def member_plan(rows, old, new):
+	"""For one locked Recipient Set holding `old` (and maybe already `new`): (names of rows to point at `new`, names to remove).
+	A person stays in the Set once, so when `new` is already there the `old` row goes away."""
+	old_rows = [r["name"] for r in rows if r.get("party") == old]
+	if not old_rows:
+		return [], []
+	if any(r.get("party") == new for r in rows):
+		return [], old_rows
+	return old_rows[:1], old_rows[1:]
+
+
+def todo_note(old, todos):
+	"""The text kept on the main Lead for tasks Frappe drops in a merge (when the same person is assigned on both Leads only one
+	task per person survives). Everything typed is escaped."""
+	from html import escape
+
+	lines = []
+	for t in todos:
+		parts = [escape(str(t.get("description") or "").strip() or "(no text)")]
+		meta = [x for x in (t.get("allocated_to"), t.get("status"), str(t["date"]) if t.get("date") else None) if x]
+		if meta:
+			parts.append("(" + escape(", ".join(str(m) for m in meta)) + ")")
+		lines.append("<li>" + " ".join(parts) + "</li>")
+	return (
+		"<b>Tasks of the merged Lead " + escape(str(old)) + "</b> (kept here because the same person is already assigned on this Lead)<ul>"
+		+ "".join(lines)
+		+ "</ul>"
+	)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Possible duplicates of one Lead (the banner on the Lead form, api/lead_duplicates.py).
+
+SIMILAR_LIMIT = 10
+SIMILAR_REASONS = ("phone", "email", "company")  # the order a reason is shown in
+
+
+def similar_leads(own, by_phone, by_email, by_company, limit=SIMILAR_LIMIT):
+	"""[{"name", "matched_on": [...]}] for the other Leads that share a phone, an email or the company name with `own`.
+
+	Each argument after `own` is the list of Lead names found for that reason (in the order they were found). The Lead itself is
+	never listed; a Lead found for several reasons is listed once with all of them and comes first; ties keep the order found."""
+	reasons, order = {}, []
+	for reason, names in (("phone", by_phone), ("email", by_email), ("company", by_company)):
+		for name in names or []:
+			if not name or name == own:
+				continue
+			if name not in reasons:
+				reasons[name] = []
+				order.append(name)
+			if reason not in reasons[name]:
+				reasons[name].append(reason)
+	order.sort(key=lambda n: -len(reasons[n]))  # stable: equal counts keep the order found
+	return [{"name": n, "matched_on": sorted(reasons[n], key=SIMILAR_REASONS.index)} for n in order[: max(1, int(limit))]]
+

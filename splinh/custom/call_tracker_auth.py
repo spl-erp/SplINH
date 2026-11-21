@@ -57,6 +57,8 @@ ALLOWED_PATHS = frozenset(_API + method for method in ALLOWED_METHODS)
 # bot builder, settings, consent editing and core file upload (a send of a device file gets its own call before it is offered).
 WABA_INBOX_METHODS = (
 	"waba.api.mobile.me",
+	"waba.api.mobile.send_device_file",
+	"waba.api.mobile.documents_for_chat",
 	"waba.api.inbox.my_numbers",
 	"waba.api.inbox.conversations",
 	"waba.api.inbox.summary",
@@ -94,6 +96,24 @@ WABA_INBOX_METHODS = (
 )
 WABA_INBOX_PATHS = frozenset(_API + method for method in WABA_INBOX_METHODS)
 
+# WhatsApp calls on the phone: the SAME call methods the browser phone uses plus the two that register the phone for the ring push. They
+# work with a token only while BOTH Waba Settings > "Phone inbox" and "WhatsApp calls on the phone app" are ticked.
+WABA_CALL_METHODS = (
+	"waba.api.calls.my_calls",
+	"waba.api.calls.offer",
+	"waba.api.calls.answer",
+	"waba.api.calls.decline",
+	"waba.api.calls.hangup",
+	"waba.api.calls.can_call",
+	"waba.api.calls.request_permission",
+	"waba.api.calls.place",
+	"waba.api.calls.answer_sdp",
+	"waba.api.calls.call_status",
+	"splinh.api.call_tracker_auth.register_push_token",
+	"splinh.api.call_tracker_auth.unregister_push_token",
+)
+WABA_CALL_PATHS = frozenset(_API + method for method in WABA_CALL_METHODS)
+
 DEVICE_ID = re.compile(r"[A-Za-z0-9._:-]{6,64}")
 EMAIL = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
 
@@ -105,7 +125,7 @@ LAST_USED_THROTTLE_SECONDS = 10 * 60
 # ------------------------------------------------------------------ pure rules
 
 
-def is_request_allowed(path, cmd=None, phone_inbox=False):
+def is_request_allowed(path, cmd=None, phone_inbox=False, phone_calls=False):
 	"""A request made with a Call Tracker token may only call an allowlisted method (and, while the phone inbox is switched on,
 	one of the inbox methods).
 
@@ -114,13 +134,27 @@ def is_request_allowed(path, cmd=None, phone_inbox=False):
 	if cmd:
 		return False
 	path = (path or "").rstrip("/")
-	return path in ALLOWED_PATHS or (bool(phone_inbox) and path in WABA_INBOX_PATHS)
+	return path in ALLOWED_PATHS or (bool(phone_inbox) and path in WABA_INBOX_PATHS) or (bool(phone_calls) and path in WABA_CALL_PATHS)
 
 
 def is_inbox_path(path):
 	"""Is this one of the phone-inbox methods (as opposed to the original Call Tracker ones)?"""
 	path = (path or "").rstrip("/")
 	return path in WABA_INBOX_PATHS and path not in ALLOWED_PATHS
+
+
+def is_calls_path(path):
+	"""Is this one of the phone-calls methods (and not an original Call Tracker one)?"""
+	path = (path or "").rstrip("/")
+	return path in WABA_CALL_PATHS and path not in ALLOWED_PATHS
+
+
+def phone_calls_enabled():
+	"""Are WhatsApp calls switched on for phones? Needs the phone inbox AND the phone-calls switch. False when Waba is not installed."""
+	try:
+		return phone_inbox_enabled() and bool(frappe.utils.cint(frappe.db.get_single_value("Waba Settings", "mobile_calls_enabled")))
+	except Exception:
+		return False
 
 
 def phone_inbox_enabled():
@@ -309,7 +343,7 @@ def revoke_token(name, reason, user=None, ip=None):
 	frappe.db.set_value(
 		TOKEN_DOCTYPE,
 		name,
-		{"enabled": 0, "revoked_on": now_datetime(), "revoke_reason": clean_text(reason, 140)},
+		{"enabled": 0, "revoked_on": now_datetime(), "revoke_reason": clean_text(reason, 140), "push_token": None, "push_enabled": 0},
 		update_modified=False,
 	)
 	log_event(user or frappe.db.get_value(TOKEN_DOCTYPE, name, "user"), "token_revoked", None, ip, reason)
@@ -370,7 +404,7 @@ def enforce_token_scope():
 	if request is None or request.headers.get(SOURCE_HEADER) != TOKEN_DOCTYPE:
 		return
 
-	if not is_request_allowed(request.path, frappe.form_dict.get("cmd"), phone_inbox=is_inbox_path(request.path) and phone_inbox_enabled()):
+	if not is_request_allowed(request.path, frappe.form_dict.get("cmd"), phone_inbox=is_inbox_path(request.path) and phone_inbox_enabled(), phone_calls=is_calls_path(request.path) and phone_calls_enabled()):
 		frappe.throw("This credential cannot be used for that request.", frappe.PermissionError)
 
 	user = frappe.session.user
